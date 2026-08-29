@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   Plus, Check, ChevronLeft, ChevronRight, Sun, Moon,
   Play, Pause, RotateCcw, PictureInPicture2, X,
-  CalendarDays, List, ListPlus, ClipboardList, Repeat,
+  CalendarDays, List, ListPlus, ClipboardList, Repeat, AlarmClock,
 } from "lucide-react";
 
 /* ---------- 日期工具 ---------- */
@@ -55,6 +55,42 @@ const formatFocusTime = (sec) => {
   const m = Math.floor((total % 3600) / 60);
   const s = total % 60;
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+};
+const formatTimerDisplay = (sec) => {
+  const total = Math.max(0, Math.floor(sec || 0));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+};
+const formatCountdownDisplay = (sec) => {
+  const total = Math.max(0, Math.floor(sec || 0));
+  const days = Math.floor(total / 86400);
+  const h = Math.floor((total % 86400) / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return days > 0 ? `${days}天 ${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(h)}:${pad(m)}:${pad(s)}`;
+};
+const countdownMatchesDate = (item, d) => {
+  if (!item || item.enabled === false) return false;
+  if (item.repeat === "daily") return true;
+  if (item.repeat === "weekly") return Array.isArray(item.weekdays) && item.weekdays.includes(d.getDay());
+  if (item.repeat === "monthly") return d.getDate() === Number(item.monthDay);
+  return false;
+};
+const getNextCountdownOccurrence = (item, base = new Date()) => {
+  if (!item?.time) return null;
+  const [hh, mm] = String(item.time).split(":").map(Number);
+  if (![hh, mm].every(Number.isFinite)) return null;
+  for (let i = 0; i < 370; i += 1) {
+    const d = new Date(base);
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() + i);
+    if (!countdownMatchesDate(item, d)) continue;
+    d.setHours(hh, mm, 0, 0);
+    if (d.getTime() > base.getTime()) return d;
+  }
+  return null;
 };
 
 /* ---------- 主题色板 ---------- */
@@ -623,6 +659,128 @@ function RecordsModal({ c, sessions, onClose, onClear }) {
   );
 }
 
+/* ---------- 自定义专注时间弹窗 ---------- */
+function CustomTimerModal({ c, currentMinutes, onClose, onApply }) {
+  const [value, setValue] = useState(String(currentMinutes || 90));
+  const submit = () => {
+    const minutes = Math.floor(Number(value));
+    if (!Number.isFinite(minutes) || minutes < 1 || minutes > 1440) return;
+    onApply(minutes);
+  };
+  return (
+    <div style={{ position: "absolute", inset: 0, background: "rgba(20,20,18,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 44 }}>
+      <div style={{ width: 280, background: c.window, borderRadius: 16, padding: 16, boxShadow: "0 20px 50px rgba(0,0,0,0.35)" }}>
+        <div className="flex items-center justify-between" style={{ marginBottom: 12 }}>
+          <span style={{ fontSize: 14.5, fontWeight: 650, color: c.text }}>自定义专注时间</span>
+          <button onClick={onClose} style={{ color: c.subtext }}><X size={16} /></button>
+        </div>
+        <div className="flex items-center" style={{ gap: 8 }}>
+          <input autoFocus type="number" min="1" max="1440" value={value} onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") submit(); if (e.key === "Escape") onClose(); }}
+            style={{ flex: 1, minWidth: 0, fontSize: 15, padding: "9px 10px", borderRadius: 9, background: c.inputBg, color: c.text, border: "none", outline: "none" }} />
+          <span style={{ fontSize: 12, color: c.subtext }}>分钟</span>
+        </div>
+        <div style={{ marginTop: 7, fontSize: 10.5, color: c.subtext }}>可输入 1–1440 分钟，例如 120、360。</div>
+        <button onClick={submit} style={{ width: "100%", marginTop: 14, padding: "9px 0", borderRadius: 10, background: c.accent, color: c.accentText, fontSize: 12.5, fontWeight: 650 }}>确定</button>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- 目标倒计时管理弹窗 ---------- */
+function CountdownManagerModal({ c, countdowns, onChange, onClose }) {
+  const blank = { title: "", time: "18:00", repeat: "daily", weekdays: [1,2,3,4,5], monthDay: 1, remindBefore: 30, remindAtTime: true, enabled: true };
+  const [editingId, setEditingId] = useState(null);
+  const [draft, setDraft] = useState(blank);
+  const beginNew = () => { setEditingId(null); setDraft({ ...blank }); };
+  const edit = (item) => { setEditingId(item.id); setDraft({ ...blank, ...item, weekdays: Array.isArray(item.weekdays) ? [...item.weekdays] : [] }); };
+  const toggleWeekday = (day) => setDraft((prev) => ({ ...prev, weekdays: prev.weekdays.includes(day) ? prev.weekdays.filter((d) => d !== day) : [...prev.weekdays, day].sort((a,b) => a-b) }));
+  const save = () => {
+    const title = draft.title.trim();
+    const before = Math.max(0, Math.min(43200, Math.floor(Number(draft.remindBefore) || 0)));
+    const monthDay = Math.max(1, Math.min(31, Math.floor(Number(draft.monthDay) || 1)));
+    if (!title || !/^([01]\d|2[0-3]):[0-5]\d$/.test(draft.time)) return;
+    if (draft.repeat === "weekly" && draft.weekdays.length === 0) return;
+    const item = { ...draft, title, remindBefore: before, monthDay };
+    if (editingId == null) onChange([...countdowns, { ...item, id: Date.now() + Math.floor(Math.random() * 10000) }]);
+    else onChange(countdowns.map((x) => x.id === editingId ? { ...item, id: editingId } : x));
+    beginNew();
+  };
+  const remove = (id) => { onChange(countdowns.filter((x) => x.id !== id)); if (editingId === id) beginNew(); };
+  const weekdayLabels = [[1,"一"],[2,"二"],[3,"三"],[4,"四"],[5,"五"],[6,"六"],[0,"日"]];
+  return (
+    <div style={{ position: "absolute", inset: 0, background: "rgba(20,20,18,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 45 }}>
+      <div style={{ width: 336, maxHeight: 610, background: c.window, borderRadius: 16, padding: 16, display: "flex", flexDirection: "column", gap: 10, boxShadow: "0 20px 50px rgba(0,0,0,0.35)", overflowY: "auto" }}>
+        <div className="flex items-center justify-between">
+          <span style={{ fontSize: 14.5, fontWeight: 650, color: c.text }}>目标倒计时</span>
+          <button onClick={onClose} style={{ color: c.subtext }}><X size={16} /></button>
+        </div>
+        {countdowns.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            {countdowns.map((item) => (
+              <div key={item.id} className="flex items-center" style={{ gap: 7, padding: "6px 8px", borderRadius: 9, background: editingId === item.id ? c.hover : "transparent" }}>
+                <button onClick={() => edit(item)} style={{ flex: 1, textAlign: "left", minWidth: 0 }}>
+                  <div style={{ fontSize: 12.5, color: c.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.title}</div>
+                  <div style={{ fontSize: 10, color: c.subtext }}>{item.time} · {item.repeat === "daily" ? "每天" : item.repeat === "weekly" ? "每周" : `每月${item.monthDay}日`}</div>
+                </button>
+                <button onClick={() => onChange(countdowns.map((x) => x.id === item.id ? { ...x, enabled: x.enabled === false } : x))}
+                  style={{ fontSize: 10.5, padding: "3px 7px", borderRadius: 999, background: item.enabled === false ? c.hover : c.accent, color: item.enabled === false ? c.subtext : c.accentText }}>
+                  {item.enabled === false ? "关闭" : "启用"}
+                </button>
+                <button onClick={() => remove(item.id)} title="删除" style={{ color: c.subtext, display: "flex" }}><X size={13} /></button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ borderTop: `1px solid ${c.divider}`, paddingTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+          <input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} placeholder="名称，例如：下班、买菜"
+            style={{ width: "100%", fontSize: 12.5, padding: "8px 9px", borderRadius: 9, background: c.inputBg, color: c.text, border: "none", outline: "none" }} />
+          <div className="flex items-center" style={{ gap: 7 }}>
+            <span style={{ fontSize: 11, color: c.subtext, width: 58 }}>目标时间</span>
+            <input type="time" value={draft.time} onChange={(e) => setDraft({ ...draft, time: e.target.value })}
+              style={{ flex: 1, fontSize: 12, padding: "6px 8px", borderRadius: 8, background: c.inputBg, color: c.text, border: "none", outline: "none" }} />
+          </div>
+          <div className="flex items-center" style={{ gap: 7 }}>
+            <span style={{ fontSize: 11, color: c.subtext, width: 58 }}>重复</span>
+            <select value={draft.repeat} onChange={(e) => setDraft({ ...draft, repeat: e.target.value })}
+              style={{ flex: 1, fontSize: 12, padding: "6px 8px", borderRadius: 8, background: c.inputBg, color: c.text, border: "none", outline: "none" }}>
+              <option value="daily">每天</option>
+              <option value="weekly">每周 / 指定星期</option>
+              <option value="monthly">每月</option>
+            </select>
+          </div>
+          {draft.repeat === "weekly" && (
+            <div className="flex items-center" style={{ gap: 5, paddingLeft: 65 }}>
+              {weekdayLabels.map(([day,label]) => <button key={day} onClick={() => toggleWeekday(day)} style={{ width: 28, height: 28, borderRadius: 999, fontSize: 11, background: draft.weekdays.includes(day) ? c.accent : c.hover, color: draft.weekdays.includes(day) ? c.accentText : c.subtext }}>{label}</button>)}
+            </div>
+          )}
+          {draft.repeat === "monthly" && (
+            <div className="flex items-center" style={{ gap: 7 }}>
+              <span style={{ fontSize: 11, color: c.subtext, width: 58 }}>每月日期</span>
+              <input type="number" min="1" max="31" value={draft.monthDay} onChange={(e) => setDraft({ ...draft, monthDay: e.target.value })}
+                style={{ width: 76, fontSize: 12, padding: "6px 8px", borderRadius: 8, background: c.inputBg, color: c.text, border: "none", outline: "none" }} />
+              <span style={{ fontSize: 11, color: c.subtext }}>日</span>
+            </div>
+          )}
+          <div className="flex items-center" style={{ gap: 7 }}>
+            <span style={{ fontSize: 11, color: c.subtext, width: 58 }}>提前提醒</span>
+            <input type="number" min="0" max="43200" value={draft.remindBefore} onChange={(e) => setDraft({ ...draft, remindBefore: e.target.value })}
+              style={{ width: 86, fontSize: 12, padding: "6px 8px", borderRadius: 8, background: c.inputBg, color: c.text, border: "none", outline: "none" }} />
+            <span style={{ fontSize: 11, color: c.subtext }}>分钟</span>
+          </div>
+          <label className="flex items-center" style={{ gap: 7, fontSize: 11.5, color: c.text, cursor: "pointer" }}>
+            <input type="checkbox" checked={draft.remindAtTime} onChange={(e) => setDraft({ ...draft, remindAtTime: e.target.checked })} /> 到点提醒
+          </label>
+          <div className="flex items-center" style={{ gap: 7 }}>
+            <button onClick={save} style={{ flex: 1, padding: "8px 0", borderRadius: 9, background: c.accent, color: c.accentText, fontSize: 12, fontWeight: 650 }}>{editingId == null ? "添加倒计时" : "保存修改"}</button>
+            {editingId != null && <button onClick={beginNew} style={{ padding: "8px 11px", borderRadius: 9, background: c.hover, color: c.subtext, fontSize: 12 }}>取消编辑</button>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ---------- 主组件 ---------- */
 export default function TodayApp() {
   const today = startOfDay(new Date());
@@ -641,6 +799,9 @@ export default function TodayApp() {
   const [repeatOption, setRepeatOption] = useState("none");
   const [showBatchModal, setShowBatchModal] = useState(false);
   const [showRecords, setShowRecords] = useState(false);
+  const [countdowns, setCountdowns] = useState([]);
+  const [showCountdownManager, setShowCountdownManager] = useState(false);
+  const [showCustomTimer, setShowCustomTimer] = useState(false);
 
   const [totalSeconds, setTotalSeconds] = useState(25 * 60);
   const [remaining, setRemaining] = useState(25 * 60);
@@ -673,6 +834,7 @@ export default function TodayApp() {
         if (data && !cancelled) {
           if (data.tasksByDate) setTasksByDate(data.tasksByDate);
           if (Array.isArray(data.sessions)) setSessions(data.sessions);
+          if (Array.isArray(data.countdowns)) setCountdowns(data.countdowns);
           if (data.taskTimerStates && typeof data.taskTimerStates === "object") setTaskTimerStates(data.taskTimerStates);
           if (typeof data.idCounter === "number") idRef.current = data.idCounter;
           if (data.theme) setTheme(data.theme);
@@ -690,7 +852,7 @@ export default function TodayApp() {
   useEffect(() => {
     if (!loaded) return;
     const t = setTimeout(() => {
-      const payload = { tasksByDate, sessions, taskTimerStates, idCounter: idRef.current, theme, totalSeconds };
+      const payload = { tasksByDate, sessions, countdowns, taskTimerStates, idCounter: idRef.current, theme, totalSeconds };
       if (window.desktopAPI?.state) {
         window.desktopAPI.state.set(payload).catch(() => {});
       } else {
@@ -698,11 +860,18 @@ export default function TodayApp() {
       }
     }, 600);
     return () => clearTimeout(t);
-  }, [tasksByDate, sessions, taskTimerStates, theme, totalSeconds, loaded]);
+  }, [tasksByDate, sessions, countdowns, taskTimerStates, theme, totalSeconds, loaded]);
 
   const key = dateKey(selectedDate);
   const tasks = tasksByDate[key] || [];
   const nowHM = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  const activeCountdowns = countdowns
+    .filter((item) => item && item.enabled !== false)
+    .map((item) => ({ ...item, nextTime: getNextCountdownOccurrence(item, now) }))
+    .filter((item) => item.nextTime)
+    .sort((a, b) => a.nextTime.getTime() - b.nextTime.getTime());
+  const nearestCountdown = activeCountdowns[0] || null;
+  const nearestCountdownSeconds = nearestCountdown ? Math.max(0, Math.ceil((nearestCountdown.nextTime.getTime() - now.getTime()) / 1000)) : 0;
 
   const setTasks = (updater) => setTasksByDate((prev) => ({ ...prev, [key]: updater(prev[key] || []) }));
   const findTaskEntry = (id) => {
@@ -882,8 +1051,7 @@ export default function TodayApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running]);
 
-  const mm = String(Math.floor(remaining / 60)).padStart(2, "0");
-  const ss = String(remaining % 60).padStart(2, "0");
+  const timerDisplay = formatTimerDisplay(remaining);
 
   const pauseActiveTask = ({ keepActive = true } = {}) => {
     if (!activeTaskId) {
@@ -983,6 +1151,11 @@ export default function TodayApp() {
     running,
     activeTaskId,
     activeTaskText: activeTask ? activeTask.text : "",
+    totalSeconds,
+    nearestCountdown: nearestCountdown ? {
+      id: nearestCountdown.id, title: nearestCountdown.title, time: nearestCountdown.time,
+      nextTime: nearestCountdown.nextTime.getTime(), remainingSeconds: nearestCountdownSeconds,
+    } : null,
   });
 
   const openFloatingWindow = () => {
@@ -995,7 +1168,7 @@ export default function TodayApp() {
     if (!loaded || !window.desktopAPI?.float?.update) return;
     window.desktopAPI.float.update(buildFloatSnapshot()).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded, now, theme, tasksByDate, sessions, taskTimerStates, openSession, remaining, running, activeTaskId]);
+  }, [loaded, now, theme, tasksByDate, sessions, countdowns, taskTimerStates, openSession, remaining, running, activeTaskId, totalSeconds]);
 
   useEffect(() => {
     if (!window.desktopAPI?.float?.onAction) return undefined;
@@ -1046,8 +1219,8 @@ export default function TodayApp() {
 
   useEffect(() => {
     if (!loaded || !window.desktopAPI?.reminders?.update) return;
-    window.desktopAPI.reminders.update(tasksByDate).catch(() => {});
-  }, [loaded, tasksByDate]);
+    window.desktopAPI.reminders.update({ tasksByDate, countdowns }).catch(() => {});
+  }, [loaded, tasksByDate, countdowns]);
 
   useEffect(() => {
     if (!window.desktopAPI?.reminders?.onEvent) return undefined;
@@ -1055,6 +1228,10 @@ export default function TodayApp() {
       if (!event) return;
       if (event.type === "task") {
         pushToast(`到点了：${event.text}（应在 ${event.time} 前完成）`);
+      } else if (event.type === "countdown-before") {
+        pushToast(`距离${event.title}还有 ${event.minutes} 分钟`);
+      } else if (event.type === "countdown-due") {
+        pushToast(`${event.title}时间到了`);
       } else if (event.type === "eod") {
         const list = Array.isArray(event.tasks) ? event.tasks : [];
         setReminderList(list);
@@ -1066,6 +1243,7 @@ export default function TodayApp() {
   useEffect(() => {
     if (!window.desktopAPI?.notifications?.onClick) return undefined;
     return window.desktopAPI.notifications.onClick((payload) => {
+      if (payload?.type?.startsWith?.("countdown")) { setShowCountdownManager(true); return; }
       if (!payload?.dateKey) return;
       setSelectedDate(dateFromKey(payload.dateKey));
       setView("day");
@@ -1129,6 +1307,25 @@ export default function TodayApp() {
               {theme === "light" ? <Moon size={15} /> : <Sun size={15} />}
             </IconButton>
           </div>
+        </div>
+
+        <div style={{ padding: nearestCountdown ? "9px 18px 0" : "7px 18px 0", flexShrink: 0 }}>
+          {nearestCountdown ? (
+            <button onClick={() => setShowCountdownManager(true)} style={{ width: "100%", padding: "8px 10px", borderRadius: 11, background: c.hover, textAlign: "left" }}>
+              <div className="flex items-center justify-between" style={{ gap: 8 }}>
+                <span className="flex items-center" style={{ gap: 6, fontSize: 11.5, fontWeight: 650, color: c.text, minWidth: 0 }}>
+                  <AlarmClock size={13} color={c.accent} />
+                  <span style={{ overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{nearestCountdown.title}</span>
+                </span>
+                <span style={{ fontSize: 10, color: c.subtext, flexShrink: 0 }}>{activeCountdowns.length > 1 ? `+${activeCountdowns.length - 1}` : nearestCountdown.time}</span>
+              </div>
+              <div style={{ fontSize: 17, fontWeight: 650, color: c.text, fontVariantNumeric: "tabular-nums", marginTop: 2 }}>还有 {formatCountdownDisplay(nearestCountdownSeconds)}</div>
+            </button>
+          ) : (
+            <button onClick={() => setShowCountdownManager(true)} className="flex items-center justify-center" style={{ width: "100%", gap: 5, fontSize: 10.5, color: c.subtext, padding: "4px 0" }}>
+              <AlarmClock size={12} /> 添加目标倒计时
+            </button>
+          )}
         </div>
 
         <div className="flex-1" style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -1239,24 +1436,19 @@ export default function TodayApp() {
             </div>
           )}
           <div className="flex items-center justify-center" style={{ gap: 10, marginBottom: 12 }}>
-            {[25, 15, 5].map((m) => (
-              <button
-                key={m}
-                onClick={() => applyPreset(m)}
-                style={{
-                  fontSize: 12, padding: "4px 10px", borderRadius: 999,
-                  background: totalSeconds === m * 60 ? c.hover : "transparent",
-                  color: totalSeconds === m * 60 ? c.text : c.subtext,
-                }}
-              >
+            {[25, 60].map((m) => (
+              <button key={m} onClick={() => applyPreset(m)} style={{ fontSize: 12, padding: "4px 10px", borderRadius: 999, background: totalSeconds === m * 60 ? c.hover : "transparent", color: totalSeconds === m * 60 ? c.text : c.subtext }}>
                 {m} 分钟
               </button>
             ))}
+            <button onClick={() => setShowCustomTimer(true)} style={{ fontSize: 12, padding: "4px 10px", borderRadius: 999, background: totalSeconds !== 25 * 60 && totalSeconds !== 60 * 60 ? c.hover : "transparent", color: totalSeconds !== 25 * 60 && totalSeconds !== 60 * 60 ? c.text : c.subtext }}>
+              自定义
+            </button>
           </div>
           <div className="flex items-center justify-center" style={{ gap: 18 }}>
             <IconButton c={c} onClick={handleReset} title="重置"><RotateCcw size={15} /></IconButton>
             <div style={{ fontSize: 30, fontWeight: 600, color: c.text, letterSpacing: 1, fontVariantNumeric: "tabular-nums", minWidth: 92, textAlign: "center" }}>
-              {mm}:{ss}
+              {timerDisplay}
             </div>
             <button
               onClick={handlePlayPause}
@@ -1282,6 +1474,8 @@ export default function TodayApp() {
           </div>
         )}
 
+        {showCustomTimer && <CustomTimerModal c={c} currentMinutes={Math.floor(totalSeconds / 60)} onClose={() => setShowCustomTimer(false)} onApply={(minutes) => { applyPreset(minutes); setShowCustomTimer(false); }} />}
+        {showCountdownManager && <CountdownManagerModal c={c} countdowns={countdowns} onChange={setCountdowns} onClose={() => setShowCountdownManager(false)} />}
         {showBatchModal && <BatchAddModal c={c} today={today} initialDate={selectedDate} onClose={() => setShowBatchModal(false)} onSubmit={addBatch} />}
         {showRecords && <RecordsModal c={c} sessions={sessions} onClose={() => setShowRecords(false)} onClear={clearSessions} />}
         {showReminderModal && (

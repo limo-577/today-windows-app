@@ -7,7 +7,7 @@ let floatWindow = null;
 let tray = null;
 let isQuitting = false;
 let lastFloatSnapshot = null;
-let reminderSchedule = {};
+let reminderSchedule = { tasksByDate: {}, countdowns: [] };
 let lastReminderCheck = Date.now() - 60_000;
 const remindedKeys = new Set();
 let reminderTimer = null;
@@ -296,10 +296,44 @@ function showNativeNotification(title, body, payload) {
   return true;
 }
 
+function countdownMatchesDate(item, d) {
+  if (!item || item.enabled === false) return false;
+  if (item.repeat === 'daily') return true;
+  if (item.repeat === 'weekly') return Array.isArray(item.weekdays) && item.weekdays.includes(d.getDay());
+  if (item.repeat === 'monthly') return d.getDate() === Number(item.monthDay);
+  return false;
+}
+
+function countdownTargetsInWindow(item, checkFrom, now, beforeMinutes) {
+  if (!item || !item.time) return [];
+  const [hh, mm] = String(item.time).split(':').map(Number);
+  if (![hh, mm].every(Number.isFinite)) return [];
+  const beforeMs = Math.max(0, Number(beforeMinutes) || 0) * 60000;
+  const start = new Date(checkFrom);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(now + beforeMs + 86400000);
+  end.setHours(23, 59, 59, 999);
+  const results = [];
+  const d = new Date(start);
+  let guard = 0;
+  while (d.getTime() <= end.getTime() && guard < 400) {
+    if (countdownMatchesDate(item, d)) {
+      const target = new Date(d);
+      target.setHours(hh, mm, 0, 0);
+      results.push(target.getTime());
+    }
+    d.setDate(d.getDate() + 1);
+    guard += 1;
+  }
+  return results;
+}
+
 function checkReminders() {
   const now = Date.now();
   const todayKey = localDateKey(new Date(now));
-  const todayTasks = Array.isArray(reminderSchedule[todayKey]) ? reminderSchedule[todayKey] : [];
+  const taskSchedule = reminderSchedule && reminderSchedule.tasksByDate ? reminderSchedule.tasksByDate : reminderSchedule;
+  const countdowns = Array.isArray(reminderSchedule?.countdowns) ? reminderSchedule.countdowns : [];
+  const todayTasks = Array.isArray(taskSchedule?.[todayKey]) ? taskSchedule[todayKey] : [];
   const checkFrom = Math.min(lastReminderCheck, now);
 
   for (const task of todayTasks) {
@@ -311,6 +345,31 @@ function checkReminders() {
       showNativeNotification('任务到点提醒', `${task.time} · ${task.text}`, { type: 'task', dateKey: todayKey, taskId: task.id });
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('reminder:event', { type: 'task', dateKey: todayKey, taskId: task.id, text: task.text, time: task.time });
+      }
+    }
+  }
+
+  for (const item of countdowns) {
+    if (!item || item.enabled === false || !item.time || !item.title) continue;
+    const beforeMinutes = Math.max(0, Math.min(43200, Math.floor(Number(item.remindBefore) || 0)));
+    const targets = countdownTargetsInWindow(item, checkFrom, now, beforeMinutes);
+    for (const target of targets) {
+      if (beforeMinutes > 0) {
+        const trigger = target - beforeMinutes * 60000;
+        const beforeKey = `countdown-before:${item.id}:${target}:${beforeMinutes}`;
+        if (trigger > checkFrom && trigger <= now && !remindedKeys.has(beforeKey)) {
+          remindedKeys.add(beforeKey);
+          showNativeNotification('倒计时提醒', `距离${item.title}还有 ${beforeMinutes} 分钟`, { type: 'countdown-before', countdownId: item.id });
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('reminder:event', { type: 'countdown-before', countdownId: item.id, title: item.title, minutes: beforeMinutes });
+        }
+      }
+      if (item.remindAtTime !== false) {
+        const dueKey = `countdown-due:${item.id}:${target}`;
+        if (target > checkFrom && target <= now && !remindedKeys.has(dueKey)) {
+          remindedKeys.add(dueKey);
+          showNativeNotification('倒计时到点', `${item.title}时间到了`, { type: 'countdown-due', countdownId: item.id });
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('reminder:event', { type: 'countdown-due', countdownId: item.id, title: item.title });
+        }
       }
     }
   }
@@ -329,9 +388,14 @@ function checkReminders() {
   }
 
   lastReminderCheck = now;
-  // 防止集合无限增长，只保留当天键。
+  // 防止集合无限增长。任务/晚间提醒只保留当天；倒计时键保留近期开过的有限集合。
   for (const key of Array.from(remindedKeys)) {
-    if (!key.includes(todayKey)) remindedKeys.delete(key);
+    if ((key.startsWith('task:') || key.startsWith('eod:')) && !key.includes(todayKey)) remindedKeys.delete(key);
+  }
+  if (remindedKeys.size > 3000) {
+    const keep = Array.from(remindedKeys).slice(-1500);
+    remindedKeys.clear();
+    keep.forEach((key) => remindedKeys.add(key));
   }
 }
 
@@ -364,7 +428,11 @@ ipcMain.handle('state:get', () => readState());
 ipcMain.handle('state:set', (_event, data) => writeState(data));
 ipcMain.handle('notification:show', (_event, title, body, payload) => showNativeNotification(title, body, payload));
 ipcMain.handle('reminders:update', (_event, schedule) => {
-  reminderSchedule = schedule && typeof schedule === 'object' ? schedule : {};
+  if (schedule && typeof schedule === 'object' && ('tasksByDate' in schedule || 'countdowns' in schedule)) {
+    reminderSchedule = { tasksByDate: schedule.tasksByDate || {}, countdowns: Array.isArray(schedule.countdowns) ? schedule.countdowns : [] };
+  } else {
+    reminderSchedule = { tasksByDate: schedule && typeof schedule === 'object' ? schedule : {}, countdowns: [] };
+  }
   checkReminders();
   return true;
 });

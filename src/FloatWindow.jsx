@@ -4,6 +4,8 @@ import { Check, GripHorizontal, Pause, Pin, Play, X } from 'lucide-react';
 const WEEKDAYS = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
 const pad = (n) => String(n).padStart(2, '0');
 const formatFocusTime = (sec) => { const total = Math.max(0, Math.floor(sec || 0)); const h = Math.floor(total / 3600); const m = Math.floor((total % 3600) / 60); const s = total % 60; return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`; };
+const formatTimerDisplay = (sec) => { const total = Math.max(0, Math.floor(sec || 0)); const h = Math.floor(total / 3600); const m = Math.floor((total % 3600) / 60); const s = total % 60; return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`; };
+const formatCountdownDisplay = (sec) => { const total = Math.max(0, Math.floor(sec || 0)); const days = Math.floor(total / 86400); const h = Math.floor((total % 86400) / 3600); const m = Math.floor((total % 3600) / 60); const s = total % 60; return days > 0 ? `${days}天 ${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(h)}:${pad(m)}:${pad(s)}`; };
 
 const THEMES = {
   light: {
@@ -55,8 +57,8 @@ export default function FloatWindow() {
   const now = useMemo(() => new Date(snapshot?.now || Date.now()), [snapshot?.now]);
   const tasks = snapshot?.tasks || [];
   const remaining = snapshot?.remaining ?? 25 * 60;
-  const mm = String(Math.floor(remaining / 60)).padStart(2, '0');
-  const ss = String(remaining % 60).padStart(2, '0');
+  const timerDisplay = formatTimerDisplay(remaining);
+  const nearestCountdown = snapshot?.nearestCountdown || null;
   const nowHM = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
 
   const togglePinned = async () => {
@@ -109,6 +111,11 @@ export default function FloatWindow() {
             overflow: 'hidden', textOverflow: 'ellipsis', padding: '0 8px',
           }}>
             {snapshot?.running ? '专注中' : '已暂停'} · {snapshot.activeTaskText}
+          </div>
+        )}
+        {nearestCountdown && (
+          <div title={nearestCountdown.title} style={{ marginTop: 5, padding: '4px 7px', borderRadius: 8, background: c.hover, fontSize: 10.5, color: c.text }}>
+            <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{nearestCountdown.title} · 还有 {formatCountdownDisplay(nearestCountdown.remainingSeconds)}</div>
           </div>
         )}
       </div>
@@ -164,7 +171,7 @@ export default function FloatWindow() {
       </div>
 
       <div className="flex items-center justify-center" style={{ gap: 12, padding: '9px 10px 10px', borderTop: `1px solid ${c.divider}`, flexShrink: 0 }}>
-        <div style={{ fontSize: 18, fontWeight: 600, fontVariantNumeric: 'tabular-nums', minWidth: 52, textAlign: 'center' }}>{mm}:{ss}</div>
+        <div style={{ fontSize: 18, fontWeight: 600, fontVariantNumeric: 'tabular-nums', minWidth: 52, textAlign: 'center' }}>{timerDisplay}</div>
         <button className="no-drag" onClick={() => window.desktopAPI?.float?.sendAction?.({ type: 'play-pause' })}
           style={{ width: 25, height: 25, borderRadius: 999, background: c.accent, color: c.accentText, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
           title={snapshot?.running ? '暂停' : '开始'}>
