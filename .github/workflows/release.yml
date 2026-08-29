@@ -28,10 +28,10 @@ jobs:
         run: npm ci
 
       - name: Build Windows installer
-        run: npm run build
+        run: npm run build -- --publish never
 
       - name: Build Windows portable
-        run: npm run build:portable
+        run: npm run build:portable -- --publish never
 
       - name: Verify release files
         shell: pwsh
