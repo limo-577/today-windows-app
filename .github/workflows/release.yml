@@ -1,0 +1,72 @@
+name: Build and Release Windows App
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    permissions:
+      id-token: write
+      contents: write
+      attestations: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Windows installer
+        run: npm run build
+
+      - name: Build Windows portable
+        run: npm run build:portable
+
+      - name: Verify release files
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "release\Today-Setup-*.exe" -File
+          $portable = Get-ChildItem "release\Today-Portable-*.exe" -File
+
+          if (-not $installer) {
+            throw "Windows installer not found."
+          }
+
+          if (-not $portable) {
+            throw "Windows portable build not found."
+          }
+
+          Write-Host "Installer:"
+          $installer | Select-Object Name, Length, FullName
+
+          Write-Host "Portable:"
+          $portable | Select-Object Name, Length, FullName
+
+      - name: Attest Windows installer
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'release/Today-Setup-*.exe'
+
+      - name: Attest Windows portable
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'release/Today-Portable-*.exe'
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/Today-Setup-*.exe
+            release/Today-Portable-*.exe
+          generate_release_notes: true

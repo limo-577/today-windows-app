@@ -1,0 +1,9 @@
+Today v1.3.3 - Resumable task timers
+
+- Only one task can run at a time.
+- Starting another task automatically pauses the current task.
+- Each task remembers its own remaining countdown time.
+- A paused task can later continue from where it stopped.
+- Each task shows cumulative focused time.
+- Every pause/switch creates a separate session record, so start/end timestamps stay accurate.
+- Main window and independent floating window stay synchronized.

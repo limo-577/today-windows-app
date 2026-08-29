@@ -1,0 +1,8 @@
+Today v1.3.2
+
+- Added per-task Start/Pause controls directly inside the independent floating window.
+- Clicking Play on a task starts that exact task timer.
+- The active running task shows Pause; when paused it shows Play to resume.
+- Switching to another task from the floating window correctly finalizes the previous focus session before starting the new one.
+- Completed tasks do not show a timer button.
+- Main window and floating window remain synchronized through Electron IPC.

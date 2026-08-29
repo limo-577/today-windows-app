@@ -1,0 +1,21 @@
+【今日 Windows 本地版】
+
+最简单的做法：
+1. Windows 电脑安装 Node.js LTS（如果已经安装就跳过）。
+2. 解压本项目。
+3. 双击 build-windows.bat。
+4. 完成后打开 release 文件夹：
+   - Today-1.0.0-x64.exe：安装版/便携版文件会在这里生成。
+
+想先预览软件：
+双击 run-dev.bat。
+
+本地数据：
+任务、主题、计时记录保存到 Windows 用户数据目录中的 today-state.json，不上传网络。
+
+已经完成的适配：
+- Today.jsx 改造成 Electron + React Windows 桌面程序
+- window.storage 改为本地 JSON 持久化
+- 保留日历、任务拖拽、批量添加、重复任务、番茄计时、记录导出、提醒、深色模式
+- 支持 Windows 原生通知接口
+- 保留原有“悬浮小窗”界面功能
