@@ -71,6 +71,30 @@ const formatCountdownDisplay = (sec) => {
   const s = total % 60;
   return days > 0 ? `${days}天 ${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(h)}:${pad(m)}:${pad(s)}`;
 };
+const mergeTaskSessions = (list) => {
+  if (!Array.isArray(list) || list.length === 0) return [];
+  const merged = new Map();
+  list.forEach((session) => {
+    const key = `${session.taskId}__${session.dateKey}`;
+    if (!merged.has(key)) {
+      merged.set(key, { ...session });
+      return;
+    }
+    const existing = merged.get(key);
+    merged.set(key, {
+      ...existing,
+      taskText: session.taskText || existing.taskText,
+      start: Number.isFinite(existing.start) && Number.isFinite(session.start)
+        ? Math.min(existing.start, session.start)
+        : (existing.start ?? session.start),
+      end: Number.isFinite(existing.end) && Number.isFinite(session.end)
+        ? Math.max(existing.end, session.end)
+        : (session.end ?? existing.end),
+      seconds: (existing.seconds || 0) + (session.seconds || 0),
+    });
+  });
+  return Array.from(merged.values());
+};
 const countdownMatchesDate = (item, d) => {
   if (!item || item.enabled === false) return false;
   if (item.repeat === "daily") return true;
@@ -833,7 +857,7 @@ export default function TodayApp() {
           : JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
         if (data && !cancelled) {
           if (data.tasksByDate) setTasksByDate(data.tasksByDate);
-          if (Array.isArray(data.sessions)) setSessions(data.sessions);
+          if (Array.isArray(data.sessions)) setSessions(mergeTaskSessions(data.sessions));
           if (Array.isArray(data.countdowns)) setCountdowns(data.countdowns);
           if (data.taskTimerStates && typeof data.taskTimerStates === "object") setTaskTimerStates(data.taskTimerStates);
           if (typeof data.idCounter === "number") idRef.current = data.idCounter;
@@ -915,7 +939,43 @@ export default function TodayApp() {
   const finalizeSession = () => {
     if (!openSession) return;
     const seconds = Math.max(1, Math.round(sessionElapsedMsRef.current / 1000));
-    setSessions((s) => [...s, { id: nextId(), taskId: openSession.taskId, taskText: openSession.taskText, dateKey: openSession.dateKey, start: openSession.startTime, end: Date.now(), seconds }]);
+    const endTime = Date.now();
+
+    // 同一个任务在同一天只保留一条记录。暂停、切换任务、再次继续时，
+    // 将新的专注时长累加到原记录，而不是新增第二条记录。
+    setSessions((prev) => {
+      const index = prev.findIndex((session) =>
+        session.taskId === openSession.taskId && session.dateKey === openSession.dateKey
+      );
+
+      if (index === -1) {
+        return [...prev, {
+          id: nextId(),
+          taskId: openSession.taskId,
+          taskText: openSession.taskText,
+          dateKey: openSession.dateKey,
+          start: openSession.startTime,
+          end: endTime,
+          seconds,
+        }];
+      }
+
+      const next = [...prev];
+      const existing = next[index];
+      next[index] = {
+        ...existing,
+        taskText: openSession.taskText || existing.taskText,
+        start: Number.isFinite(existing.start)
+          ? Math.min(existing.start, openSession.startTime)
+          : openSession.startTime,
+        end: Number.isFinite(existing.end)
+          ? Math.max(existing.end, endTime)
+          : endTime,
+        seconds: (existing.seconds || 0) + seconds,
+      };
+      return next;
+    });
+
     setOpenSession(null);
     sessionElapsedMsRef.current = 0;
   };
