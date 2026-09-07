@@ -1,6 +1,6 @@
 {
   "name": "today-windows-app",
-  "version": "1.4.1",
+  "version": "1.5.3",
   "private": true,
   "description": "今日 - Windows 本地计划、独立悬浮窗、后台提醒、可续接专注计时与目标倒计时软件",
   "main": "electron/main.cjs",

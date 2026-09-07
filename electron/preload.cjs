@@ -19,6 +19,14 @@ contextBridge.exposeInMainWorld('desktopAPI', {
   notifications: {
     onClick: (callback) => subscribe('notification:clicked', callback),
   },
+  sound: {
+    choose: () => ipcRenderer.invoke('sound:choose'),
+    getDataUrl: () => ipcRenderer.invoke('sound:get-data-url'),
+    clear: () => ipcRenderer.invoke('sound:clear'),
+  },
+  windowMode: {
+    setCalendar: (enabled) => ipcRenderer.invoke('window:set-calendar-mode', Boolean(enabled)),
+  },
   setAlwaysOnTop: (value) => ipcRenderer.invoke('window:set-always-on-top', value),
   setWindowOpacity: (value) => ipcRenderer.invoke('window:set-opacity', value),
   onWindowAppearance: (callback) => subscribe('window:appearance', callback),

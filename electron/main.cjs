@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Notification, Tray, Menu, nativeImage, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, Notification, Tray, Menu, nativeImage, screen, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -7,7 +7,8 @@ let floatWindow = null;
 let tray = null;
 let isQuitting = false;
 let lastFloatSnapshot = null;
-let reminderSchedule = { tasksByDate: {}, countdowns: [] };
+let reminderSchedule = { tasksByDate: {}, countdowns: [], soundMode: 'default' };
+let preCalendarBounds = null;
 let lastReminderCheck = Date.now() - 60_000;
 const remindedKeys = new Set();
 let reminderTimer = null;
@@ -185,14 +186,15 @@ function createFloatWindow() {
   }
 
   const prefs = readPrefs();
-  const bounds = clampBounds(prefs.floatBounds, { width: 270, height: 360 });
+  const compactFloatBounds = prefs.floatBounds ? { ...prefs.floatBounds, width: Math.min(Number(prefs.floatBounds.width) || 235, 250), height: Math.min(Number(prefs.floatBounds.height) || 260, 300) } : null;
+  const bounds = clampBounds(compactFloatBounds, { width: 235, height: 260 });
   const opacity = Math.max(0.3, Math.min(1, Number(prefs.floatOpacity) || 1));
   const pinned = prefs.floatPinned !== false;
 
   floatWindow = new BrowserWindow({
     ...bounds,
-    minWidth: 235,
-    minHeight: 230,
+    minWidth: 205,
+    minHeight: 160,
     maxWidth: 420,
     maxHeight: 720,
     frame: false,
@@ -283,9 +285,9 @@ function dueTimestamp(dateKey, hm) {
   return new Date(y, m - 1, d, hh, mm, 0, 0).getTime();
 }
 
-function showNativeNotification(title, body, payload) {
+function showNativeNotification(title, body, payload, options = {}) {
   if (!Notification.isSupported()) return false;
-  const notification = new Notification({ title: String(title || '今日'), body: String(body || ''), silent: false });
+  const notification = new Notification({ title: String(title || '今日'), body: String(body || ''), silent: Boolean(options.silent) });
   notification.on('click', () => {
     showMainWindow();
     if (payload && mainWindow && !mainWindow.isDestroyed()) {
@@ -336,15 +338,18 @@ function checkReminders() {
   const todayTasks = Array.isArray(taskSchedule?.[todayKey]) ? taskSchedule[todayKey] : [];
   const checkFrom = Math.min(lastReminderCheck, now);
 
+  const useCustomSound = reminderSchedule?.soundMode === 'custom';
   for (const task of todayTasks) {
-    if (!task || task.done || !task.time) continue;
-    const due = dueTimestamp(todayKey, task.time);
-    const reminderKey = `task:${todayKey}:${task.id}:${task.time}`;
+    if (!task || task.done || task.reminderEnabled === false) continue;
+    const alarmTime = task.reminderTime || task.time;
+    if (!alarmTime) continue;
+    const due = dueTimestamp(todayKey, alarmTime);
+    const reminderKey = `task:${todayKey}:${task.id}:${alarmTime}`;
     if (Number.isFinite(due) && due > checkFrom && due <= now && !remindedKeys.has(reminderKey)) {
       remindedKeys.add(reminderKey);
-      showNativeNotification('任务到点提醒', `${task.time} · ${task.text}`, { type: 'task', dateKey: todayKey, taskId: task.id });
+      showNativeNotification('任务提醒', `${alarmTime} · ${task.text}`, { type: 'task', dateKey: todayKey, taskId: task.id }, { silent: useCustomSound });
       if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('reminder:event', { type: 'task', dateKey: todayKey, taskId: task.id, text: task.text, time: task.time });
+        mainWindow.webContents.send('reminder:event', { type: 'task', dateKey: todayKey, taskId: task.id, text: task.text, time: alarmTime });
       }
     }
   }
@@ -359,7 +364,7 @@ function checkReminders() {
         const beforeKey = `countdown-before:${item.id}:${target}:${beforeMinutes}`;
         if (trigger > checkFrom && trigger <= now && !remindedKeys.has(beforeKey)) {
           remindedKeys.add(beforeKey);
-          showNativeNotification('倒计时提醒', `距离${item.title}还有 ${beforeMinutes} 分钟`, { type: 'countdown-before', countdownId: item.id });
+          showNativeNotification('倒计时提醒', `距离${item.title}还有 ${beforeMinutes} 分钟`, { type: 'countdown-before', countdownId: item.id }, { silent: useCustomSound });
           if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('reminder:event', { type: 'countdown-before', countdownId: item.id, title: item.title, minutes: beforeMinutes });
         }
       }
@@ -367,7 +372,7 @@ function checkReminders() {
         const dueKey = `countdown-due:${item.id}:${target}`;
         if (target > checkFrom && target <= now && !remindedKeys.has(dueKey)) {
           remindedKeys.add(dueKey);
-          showNativeNotification('倒计时到点', `${item.title}时间到了`, { type: 'countdown-due', countdownId: item.id });
+          showNativeNotification('倒计时到点', `${item.title}时间到了`, { type: 'countdown-due', countdownId: item.id }, { silent: useCustomSound });
           if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('reminder:event', { type: 'countdown-due', countdownId: item.id, title: item.title });
         }
       }
@@ -380,7 +385,7 @@ function checkReminders() {
     const incomplete = todayTasks.filter((t) => t && !t.done);
     remindedKeys.add(eodKey);
     if (incomplete.length > 0) {
-      showNativeNotification('今日待办提醒', `还有 ${incomplete.length} 项任务未完成，抓紧完成吧！`, { type: 'eod', dateKey: todayKey });
+      showNativeNotification('今日待办提醒', `还有 ${incomplete.length} 项任务未完成，抓紧完成吧！`, { type: 'eod', dateKey: todayKey }, { silent: useCustomSound });
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('reminder:event', { type: 'eod', dateKey: todayKey, tasks: incomplete });
       }
@@ -429,11 +434,79 @@ ipcMain.handle('state:set', (_event, data) => writeState(data));
 ipcMain.handle('notification:show', (_event, title, body, payload) => showNativeNotification(title, body, payload));
 ipcMain.handle('reminders:update', (_event, schedule) => {
   if (schedule && typeof schedule === 'object' && ('tasksByDate' in schedule || 'countdowns' in schedule)) {
-    reminderSchedule = { tasksByDate: schedule.tasksByDate || {}, countdowns: Array.isArray(schedule.countdowns) ? schedule.countdowns : [] };
+    reminderSchedule = { tasksByDate: schedule.tasksByDate || {}, countdowns: Array.isArray(schedule.countdowns) ? schedule.countdowns : [], soundMode: schedule.soundMode === 'custom' ? 'custom' : 'default' };
   } else {
-    reminderSchedule = { tasksByDate: schedule && typeof schedule === 'object' ? schedule : {}, countdowns: [] };
+    reminderSchedule = { tasksByDate: schedule && typeof schedule === 'object' ? schedule : {}, countdowns: [], soundMode: 'default' };
   }
   checkReminders();
+  return true;
+});
+
+ipcMain.handle('window:set-calendar-mode', (_event, enabled) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  if (enabled) {
+    if (!preCalendarBounds) preCalendarBounds = mainWindow.getBounds();
+    const current = mainWindow.getBounds();
+    const work = screen.getDisplayMatching(current).workArea;
+    const width = Math.min(900, work.width);
+    const height = Math.min(820, work.height);
+    mainWindow.setMinimumSize(Math.min(760, work.width), Math.min(650, work.height));
+    const x = Math.max(work.x, Math.min(current.x, work.x + work.width - width));
+    const y = Math.max(work.y, Math.min(current.y, work.y + work.height - height));
+    mainWindow.setBounds({ x, y, width, height }, true);
+  } else {
+    mainWindow.setMinimumSize(430, 720);
+    if (preCalendarBounds) {
+      const target = clampBounds(preCalendarBounds, { width: 440, height: 740 });
+      preCalendarBounds = null;
+      mainWindow.setBounds(target, true);
+    }
+  }
+  return true;
+});
+
+function customSoundPrefs() {
+  const prefs = readPrefs();
+  const file = prefs.customSoundFile ? userFile(prefs.customSoundFile) : null;
+  return { prefs, file };
+}
+
+ipcMain.handle('sound:choose', async () => {
+  const result = await dialog.showOpenDialog(mainWindow || undefined, {
+    title: '选择提醒铃声', properties: ['openFile'],
+    filters: [{ name: 'Audio', extensions: ['mp3', 'wav', 'm4a', 'ogg'] }],
+  });
+  if (result.canceled || !result.filePaths?.[0]) return { ok: false };
+  const src = result.filePaths[0];
+  const stat = fs.statSync(src);
+  if (stat.size > 20 * 1024 * 1024) return { ok: false, error: '铃声文件不能超过20MB' };
+  const ext = path.extname(src).toLowerCase();
+  if (!['.mp3', '.wav', '.m4a', '.ogg'].includes(ext)) return { ok: false, error: '不支持的音频格式' };
+  const old = customSoundPrefs();
+  if (old.file) { try { fs.unlinkSync(old.file); } catch {} }
+  const fileName = `custom-reminder-sound${ext}`;
+  const dest = userFile(fileName);
+  fs.copyFileSync(src, dest);
+  const name = path.basename(src);
+  writePrefs({ customSoundFile: fileName, customSoundName: name });
+  return { ok: true, name };
+});
+
+ipcMain.handle('sound:get-data-url', () => {
+  try {
+    const { prefs, file } = customSoundPrefs();
+    if (!file || !fs.existsSync(file)) return { ok: false };
+    const ext = path.extname(file).toLowerCase();
+    const mime = ext === '.mp3' ? 'audio/mpeg' : ext === '.wav' ? 'audio/wav' : ext === '.m4a' ? 'audio/mp4' : 'audio/ogg';
+    const buf = fs.readFileSync(file);
+    return { ok: true, name: prefs.customSoundName || path.basename(file), dataUrl: `data:${mime};base64,${buf.toString('base64')}` };
+  } catch { return { ok: false }; }
+});
+
+ipcMain.handle('sound:clear', () => {
+  const { file } = customSoundPrefs();
+  if (file) { try { fs.unlinkSync(file); } catch {} }
+  writePrefs({ customSoundFile: null, customSoundName: null });
   return true;
 });
 

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   Plus, Check, ChevronLeft, ChevronRight, Sun, Moon,
   Play, Pause, RotateCcw, PictureInPicture2, X,
-  CalendarDays, List, ListPlus, ClipboardList, Repeat, AlarmClock,
+  CalendarDays, List, ListPlus, ClipboardList, Repeat, AlarmClock, Pencil, Bell, BellOff, Volume2, ArrowRight, ChevronDown, ChevronUp, FileText,
 } from "lucide-react";
 
 /* ---------- 日期工具 ---------- */
@@ -71,30 +71,6 @@ const formatCountdownDisplay = (sec) => {
   const s = total % 60;
   return days > 0 ? `${days}天 ${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(h)}:${pad(m)}:${pad(s)}`;
 };
-const mergeTaskSessions = (list) => {
-  if (!Array.isArray(list) || list.length === 0) return [];
-  const merged = new Map();
-  list.forEach((session) => {
-    const key = `${session.taskId}__${session.dateKey}`;
-    if (!merged.has(key)) {
-      merged.set(key, { ...session });
-      return;
-    }
-    const existing = merged.get(key);
-    merged.set(key, {
-      ...existing,
-      taskText: session.taskText || existing.taskText,
-      start: Number.isFinite(existing.start) && Number.isFinite(session.start)
-        ? Math.min(existing.start, session.start)
-        : (existing.start ?? session.start),
-      end: Number.isFinite(existing.end) && Number.isFinite(session.end)
-        ? Math.max(existing.end, session.end)
-        : (session.end ?? existing.end),
-      seconds: (existing.seconds || 0) + (session.seconds || 0),
-    });
-  });
-  return Array.from(merged.values());
-};
 const countdownMatchesDate = (item, d) => {
   if (!item || item.enabled === false) return false;
   if (item.repeat === "daily") return true;
@@ -117,17 +93,43 @@ const getNextCountdownOccurrence = (item, base = new Date()) => {
   return null;
 };
 
+const taskReminderTime = (task) => {
+  if (!task || task.reminderEnabled === false) return null;
+  return task.reminderTime || task.time || null;
+};
+const mergeSessionRecord = (list, record) => {
+  if (!record || !record.taskId || !record.dateKey) return list;
+  const seconds = Math.max(0, Math.floor(Number(record.seconds) || 0));
+  if (seconds <= 0 && !record.completedOnly) return list;
+  const idx = list.findIndex((x) => x.taskId === record.taskId && x.dateKey === record.dateKey);
+  if (idx < 0) return [...list, { ...record, seconds }];
+  const next = [...list];
+  const old = next[idx];
+  next[idx] = {
+    ...old,
+    taskText: record.taskText || old.taskText,
+    start: Math.min(Number(old.start) || Number(record.start), Number(record.start) || Number(old.start)),
+    end: Math.max(Number(old.end) || 0, Number(record.end) || 0),
+    seconds: Math.max(0, Number(old.seconds) || 0) + seconds,
+    completedOnly: old.completedOnly && seconds <= 0 ? true : undefined,
+  };
+  return next;
+};
+const normalizeSessions = (sessions) => (Array.isArray(sessions) ? sessions : []).reduce((acc, item) => mergeSessionRecord(acc, item), []);
+
 /* ---------- 主题色板 ---------- */
 const THEMES = {
   light: {
     bg: "#EDEEEA", window: "#FCFCFA", text: "#2B2B27", subtext: "#9A9A90",
     divider: "#EEEDE7", hover: "#F4F3EE", accent: "#6E8F6F", accentText: "#FFFFFF",
     doneText: "#B7B6AD", inputBg: "#F4F3EE", overdueBg: "#F3D9D4", overdueText: "#B14B3A",
+    activeTaskBg: "#DCE8D8",
   },
   dark: {
     bg: "#111110", window: "#1B1B19", text: "#EDEDE7", subtext: "#8B8B82",
     divider: "#2A2A26", hover: "#242422", accent: "#8FB398", accentText: "#15251B",
     doneText: "#5C5C55", inputBg: "#242422", overdueBg: "#3A2420", overdueText: "#E08A73",
+    activeTaskBg: "#536457",
   },
 };
 
@@ -159,18 +161,18 @@ function CheckCircle({ done, onClick, c }) {
 }
 
 /* ---------- 任务行 ---------- */
-function TaskRow({ task, c, compact, onToggle, onDelete, onAction, isActive, isRunning, overdue, focusSeconds = 0 }) {
-  const [hover, setHover] = useState(false);
+function TaskRow({ task, c, compact, onToggle, onDelete, onAction, onEdit, onReminder, isActive, isRunning, overdue, focusSeconds = 0 }) {
+  const reminderTime = taskReminderTime(task);
+  const [noteOpen, setNoteOpen] = useState(false);
+  const note = typeof task.note === "string" ? task.note.trim() : "";
   return (
-    <div
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      className="flex items-center"
-      style={{
-        gap: compact ? 6 : 9, padding: compact ? "5px 4px" : "8px 4px",
-        background: isActive ? c.hover : "transparent", borderRadius: 8,
-      }}
-    >
+    <div style={{
+      padding: compact ? "0" : "2px 0",
+      background: isActive ? c.activeTaskBg : "transparent", borderRadius: 8,
+    }}>
+    <div className="flex items-center" style={{
+      gap: compact ? 6 : 8, padding: compact ? "5px 4px" : "8px 4px",
+    }}>
       <CheckCircle done={task.done} c={c} onClick={() => onToggle(task.id)} />
       {task.repeat && task.repeat !== "none" && (
         <span title={REPEAT_LABELS[task.repeat]} style={{ display: "flex", flexShrink: 0 }}>
@@ -178,50 +180,60 @@ function TaskRow({ task, c, compact, onToggle, onDelete, onAction, isActive, isR
         </span>
       )}
       {task.time && (
-        <span
-          style={{
-            fontSize: 10, flexShrink: 0, fontWeight: overdue ? 700 : 400,
-            color: overdue ? c.overdueText : c.subtext,
-            background: compact ? "transparent" : overdue ? c.overdueBg : c.hover,
-            padding: compact ? 0 : "2px 6px", borderRadius: 999,
-          }}
-        >
-          {task.time}
-        </span>
+        <span style={{
+          fontSize: 10, flexShrink: 0, fontWeight: overdue ? 700 : 400,
+          color: overdue ? c.overdueText : c.subtext,
+          background: compact ? "transparent" : overdue ? c.overdueBg : c.hover,
+          padding: compact ? 0 : "2px 6px", borderRadius: 999,
+        }}>{task.time}</span>
       )}
-      <span
-        style={{
-          flex: 1, fontSize: compact ? 12.5 : 14,
-          color: task.done ? c.doneText : c.text,
-          textDecoration: task.done ? "line-through" : "none",
-          wordBreak: "break-word",
-        }}
-      >
-        {task.text}
-      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{
+          fontSize: compact ? 12.5 : 14, color: task.done ? c.doneText : c.text,
+          textDecoration: task.done ? "line-through" : "none", wordBreak: "break-word",
+        }}>{task.text}</div>
+        {!compact && reminderTime && (
+          <div style={{ fontSize: 9.5, color: c.subtext, marginTop: 1 }}>提醒 {reminderTime}</div>
+        )}
+        {!compact && note && (
+          <button onClick={() => setNoteOpen((v) => !v)} title={noteOpen ? "收起备注" : "展开备注"}
+            className="flex items-center" style={{ gap: 3, marginTop: 3, fontSize: 9.5, color: c.subtext }}>
+            <FileText size={10} /> 备注 {noteOpen ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+          </button>
+        )}
+      </div>
       {focusSeconds > 0 && (
         <span title="累计专注时间" style={{ fontSize: compact ? 9 : 10, color: isActive ? c.accent : c.subtext, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
           {formatFocusTime(focusSeconds)}
         </span>
       )}
+      {!compact && onReminder && (
+        <button onClick={() => onReminder(task.id)} title={reminderTime ? `提醒 ${reminderTime}` : "设置提醒"}
+          style={{ color: reminderTime ? c.accent : c.subtext, flexShrink: 0, display: "flex", padding: 2 }}>
+          {reminderTime ? <Bell size={13} /> : <BellOff size={13} />}
+        </button>
+      )}
+      {!compact && onEdit && (
+        <button onClick={() => onEdit(task.id)} title="编辑任务" style={{ color: c.subtext, flexShrink: 0, display: "flex", padding: 2 }}>
+          <Pencil size={13} />
+        </button>
+      )}
       {!compact && !task.done && onAction && (
-        <button
-          onClick={() => onAction(task.id)}
-          style={{ opacity: hover || isActive ? 1 : 0, transition: "opacity .15s ease", color: isActive ? c.accent : c.subtext, flexShrink: 0 }}
-          title={isActive && isRunning ? "暂停" : "开始计时"}
-        >
+        <button onClick={() => onAction(task.id)} style={{ color: isActive ? c.accent : c.subtext, flexShrink: 0, display: "flex", padding: 2 }} title={isActive && isRunning ? "暂停" : "开始计时"}>
           {isActive && isRunning ? <Pause size={13} /> : <Play size={13} />}
         </button>
       )}
       {!compact && onDelete && (
-        <button
-          onClick={() => onDelete(task.id)}
-          style={{ opacity: hover ? 1 : 0, transition: "opacity .15s ease", color: c.subtext, flexShrink: 0 }}
-          title="删除任务"
-        >
+        <button onClick={() => onDelete(task.id)} style={{ color: c.subtext, flexShrink: 0, display: "flex", padding: 2 }} title="删除任务">
           <X size={13} />
         </button>
       )}
+    </div>
+    {!compact && note && noteOpen && (
+      <div style={{ margin: "0 8px 7px 32px", padding: "7px 9px", borderRadius: 8, background: c.inputBg, color: c.text, fontSize: 11.5, lineHeight: 1.55, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+        {note}
+      </div>
+    )}
     </div>
   );
 }
@@ -247,15 +259,17 @@ function IconButton({ children, onClick, title, c, active }) {
 }
 
 /* ---------- 月历视图（支持任务拖拽改期） ---------- */
-function CalendarView({ monthDate, setMonthDate, selectedDate, today, tasksByDate, c, onSelectDate, onMoveTask, onClearDay, onClearMonth, onClearAll }) {
+function CalendarView({ monthDate, setMonthDate, selectedDate, today, tasksByDate, c, onSelectDate, onOpenDay, onMoveTask, onDeleteTask, onClearDay, onClearDates, onClearMonth, onClearAll }) {
   const [dragOverKey, setDragOverKey] = useState(null);
   const [confirmAction, setConfirmAction] = useState(null);
+  const [cleanupMode, setCleanupMode] = useState(false);
+  const [cleanupDates, setCleanupDates] = useState(new Set());
+  const [cleanupTasks, setCleanupTasks] = useState(new Set());
   const confirmTimerRef = useRef(null);
   const armOrRun = (key, action) => {
     if (confirmAction === key) {
       if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
-      setConfirmAction(null);
-      action();
+      setConfirmAction(null); action();
     } else {
       if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
       setConfirmAction(key);
@@ -263,119 +277,155 @@ function CalendarView({ monthDate, setMonthDate, selectedDate, today, tasksByDat
     }
   };
   const cells = buildMonthGrid(monthDate);
+  const selectedKey = dateKey(selectedDate);
+  const todayKey = dateKey(today);
+  const selectedTasks = tasksByDate[selectedKey] || [];
+  const selectedIsPast = startOfDay(selectedDate) < startOfDay(today);
+  const incompleteSelected = selectedTasks.filter((t) => !t.done);
+  const cleanupTaskRows = Array.from(cleanupDates)
+    .sort((a, b) => dateFromKey(a) - dateFromKey(b))
+    .flatMap((dk) => (tasksByDate[dk] || []).map((task) => ({ dk, task })));
+
+  const toggleCleanupDate = (k) => {
+    setCleanupDates((prev) => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k); else next.add(k);
+      return next;
+    });
+  };
+  const toggleCleanupTask = (id) => setCleanupTasks((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const exitCleanupMode = () => { setCleanupMode(false); setCleanupDates(new Set()); setCleanupTasks(new Set()); setConfirmAction(null); };
+
   return (
-    <div style={{ padding: "6px 18px 8px" }}>
-      <div className="flex items-center justify-between" style={{ marginBottom: 10 }}>
-        <IconButton c={c} onClick={() => setMonthDate((d) => new Date(d.getFullYear(), d.getMonth() - 1, 1))} title="上个月">
-          <ChevronLeft size={16} />
-        </IconButton>
-        <div style={{ fontSize: 15, fontWeight: 650, color: c.text }}>
-          {monthDate.getFullYear()}年{monthDate.getMonth() + 1}月
+    <div style={{ padding: "8px 14px 12px", height: "100%", boxSizing: "border-box" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 315px", gap: 14, height: "100%" }}>
+        <div style={{ minWidth: 0, overflowY: "auto", paddingRight: 2 }}>
+          <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+            <IconButton c={c} onClick={() => setMonthDate((d) => new Date(d.getFullYear(), d.getMonth() - 1, 1))} title="上个月"><ChevronLeft size={16} /></IconButton>
+            <div style={{ fontSize: 16, fontWeight: 650, color: c.text }}>{monthDate.getFullYear()}年{monthDate.getMonth() + 1}月</div>
+            <IconButton c={c} onClick={() => setMonthDate((d) => new Date(d.getFullYear(), d.getMonth() + 1, 1))} title="下个月"><ChevronRight size={16} /></IconButton>
+          </div>
+          <div className="flex items-center justify-between" style={{ marginBottom: 7, gap: 8 }}>
+            <div style={{ fontSize: 10.5, color: c.subtext }}>可拖动任务改期；清理模式可跨多天选择任务</div>
+            <button onClick={() => cleanupMode ? exitCleanupMode() : setCleanupMode(true)}
+              style={{ flexShrink: 0, fontSize: 10.5, padding: "5px 8px", borderRadius: 8, background: cleanupMode ? c.accent : c.hover, color: cleanupMode ? c.accentText : c.text }}>
+              {cleanupMode ? "退出清理" : "多天清理"}
+            </button>
+          </div>
+          <div className="grid grid-cols-7" style={{ marginBottom: 4 }}>
+            {WEEKDAYS.map((w) => <div key={w} style={{ fontSize: 10.5, color: c.subtext, textAlign: "center", padding: "2px 0" }}>{w.slice(2)}</div>)}
+          </div>
+          <div className="grid grid-cols-7" style={{ gap: 4 }}>
+            {cells.map((d, i) => {
+              if (!d) return <div key={i} />;
+              const k = dateKey(d); const list = tasksByDate[k] || [];
+              const isToday = k === todayKey; const isSelected = k === selectedKey; const isDragOver = dragOverKey === k; const isCleanupSelected = cleanupDates.has(k);
+              return (
+                <div key={i} onDragOver={(e) => { if (!cleanupMode) { e.preventDefault(); setDragOverKey(k); } }} onDragLeave={() => setDragOverKey((dk) => dk === k ? null : dk)}
+                  onDrop={(e) => { if (cleanupMode) return; e.preventDefault(); try { const data = JSON.parse(e.dataTransfer.getData("text/plain")); onMoveTask(data.fromKey, k, data.taskId); } catch {} setDragOverKey(null); }}
+                  style={{ minHeight: 84, borderRadius: 10, padding: "4px 3px", background: isCleanupSelected ? c.overdueBg : isDragOver ? c.hover : isSelected ? c.accent : isToday ? c.hover : "transparent", outline: isCleanupSelected ? `1.5px solid ${c.overdueText}` : isDragOver ? `1.5px dashed ${c.accent}` : "none" }}>
+                  <button onClick={() => cleanupMode ? toggleCleanupDate(k) : onSelectDate(d)} style={{ width: "100%", fontSize: 12, fontWeight: isToday || isSelected || isCleanupSelected ? 700 : 400, color: isCleanupSelected ? c.overdueText : isSelected ? c.accentText : c.text, lineHeight: 1.4 }}>
+                    {cleanupMode ? `${isCleanupSelected ? "✓ " : ""}${d.getDate()}` : d.getDate()}
+                  </button>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 2 }}>
+                    {list.slice(0, 4).map((t) => (
+                      <div key={t.id} draggable={!cleanupMode} onDragStart={(e) => { if (!cleanupMode) e.dataTransfer.setData("text/plain", JSON.stringify({ taskId: t.id, fromKey: k })); }} title={t.text}
+                        style={{ fontSize: 8.5, lineHeight: "12px", padding: "1px 3px", borderRadius: 4, cursor: cleanupMode ? "default" : "grab", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textDecoration: t.done ? "line-through" : "none", background: t.done ? "transparent" : isSelected ? "rgba(255,255,255,0.35)" : c.accent, color: t.done ? c.subtext : c.accentText, border: t.done ? `1px solid ${c.divider}` : "none" }}>
+                        {t.text}
+                      </div>
+                    ))}
+                    {list.length > 4 && <div style={{ fontSize: 8, textAlign: "center", color: isSelected ? c.accentText : c.subtext }}>+{list.length - 4}</div>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
-        <IconButton c={c} onClick={() => setMonthDate((d) => new Date(d.getFullYear(), d.getMonth() + 1, 1))} title="下个月">
-          <ChevronRight size={16} />
-        </IconButton>
-      </div>
-      <div style={{ fontSize: 10, color: c.subtext, textAlign: "center", marginBottom: 6 }}>拖动任务小方块可以改到别的日期</div>
-      <div className="grid grid-cols-7" style={{ marginBottom: 4 }}>
-        {WEEKDAYS.map((w) => (
-          <div key={w} style={{ fontSize: 10.5, color: c.subtext, textAlign: "center", padding: "2px 0" }}>{w.slice(2)}</div>
-        ))}
-      </div>
-      <div className="grid grid-cols-7" style={{ gap: 3 }}>
-        {cells.map((d, i) => {
-          if (!d) return <div key={i} />;
-          const k = dateKey(d);
-          const list = tasksByDate[k] || [];
-          const isToday = k === dateKey(today);
-          const isSelected = k === dateKey(selectedDate);
-          const isDragOver = dragOverKey === k;
-          return (
-            <div
-              key={i}
-              onDragOver={(e) => { e.preventDefault(); setDragOverKey(k); }}
-              onDragLeave={() => setDragOverKey((dk) => (dk === k ? null : dk))}
-              onDrop={(e) => {
-                e.preventDefault();
-                try {
-                  const data = JSON.parse(e.dataTransfer.getData("text/plain"));
-                  onMoveTask(data.fromKey, k, data.taskId);
-                } catch (err) {}
-                setDragOverKey(null);
-              }}
-              className="flex flex-col items-center"
-              style={{
-                minHeight: 62, borderRadius: 10, padding: "3px 2px", gap: 2,
-                background: isDragOver ? c.hover : isSelected ? c.accent : isToday ? c.hover : "transparent",
-                outline: isDragOver ? `1.5px dashed ${c.accent}` : "none",
-              }}
-            >
-              <button
-                onClick={() => onSelectDate(d)}
-                style={{ fontSize: 12, fontWeight: isToday || isSelected ? 700 : 400, color: isSelected ? c.accentText : c.text, lineHeight: 1.4 }}
-              >
-                {d.getDate()}
-              </button>
-              <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 1 }}>
-                {list.slice(0, 2).map((t) => (
-                  <div
-                    key={t.id}
-                    draggable
-                    onDragStart={(e) => e.dataTransfer.setData("text/plain", JSON.stringify({ taskId: t.id, fromKey: k }))}
-                    title={t.text}
-                    style={{
-                      fontSize: 8, lineHeight: "11px", padding: "1px 3px", borderRadius: 4, cursor: "grab",
-                      whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-                      textDecoration: t.done ? "line-through" : "none",
-                      background: t.done ? "transparent" : isSelected ? "rgba(255,255,255,0.35)" : c.accent,
-                      color: t.done ? c.subtext : isSelected ? c.accentText : c.accentText,
-                      border: t.done ? `1px solid ${c.divider}` : "none",
-                    }}
-                  >
-                    {t.text}
+
+        <div style={{ borderLeft: `1px solid ${c.divider}`, paddingLeft: 14, minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          {cleanupMode ? (
+            <>
+              <div className="flex items-center justify-between" style={{ marginBottom: 7 }}>
+                <div>
+                  <div style={{ fontSize: 15, fontWeight: 650, color: c.text }}>多天清理</div>
+                  <div style={{ fontSize: 10.5, color: c.subtext }}>已选 {cleanupDates.size} 天 · {cleanupTasks.size} 项任务</div>
+                </div>
+                <button onClick={() => { setCleanupDates(new Set()); setCleanupTasks(new Set()); }} style={{ fontSize: 10.5, color: c.subtext }}>清除选择</button>
+              </div>
+              <div style={{ fontSize: 10.5, color: c.subtext, marginBottom: 7 }}>先在左侧点选需要处理的日期，再在下面勾选只想删除的任务。</div>
+              <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+                {cleanupDates.size === 0 && <div style={{ fontSize: 12, color: c.subtext, padding: "22px 4px", textAlign: "center" }}>请先选择日期</div>}
+                {cleanupDates.size > 0 && cleanupTaskRows.length === 0 && <div style={{ fontSize: 12, color: c.subtext, padding: "22px 4px", textAlign: "center" }}>所选日期没有任务</div>}
+                {cleanupTaskRows.map(({ dk, task }) => (
+                  <label key={`${dk}-${task.id}`} className="flex items-start" style={{ gap: 7, padding: "7px 6px", borderBottom: `1px solid ${c.divider}`, cursor: "pointer" }}>
+                    <input type="checkbox" checked={cleanupTasks.has(task.id)} onChange={() => toggleCleanupTask(task.id)} style={{ marginTop: 2, accentColor: c.accent }} />
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: 11.5, color: task.done ? c.doneText : c.text, textDecoration: task.done ? "line-through" : "none", wordBreak: "break-word" }}>{task.text}</div>
+                      <div style={{ fontSize: 9.5, color: c.subtext, marginTop: 2 }}>{displayDate(dateFromKey(dk))}{task.time ? ` · ${task.time}` : ""}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+              <div style={{ borderTop: `1px solid ${c.divider}`, paddingTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+                <button disabled={cleanupTasks.size === 0} onClick={() => armOrRun("selectedTasks", () => { cleanupTasks.forEach((id) => onDeleteTask(id)); setCleanupTasks(new Set()); })}
+                  style={{ fontSize: 10.5, padding: "7px 8px", borderRadius: 7, background: confirmAction === "selectedTasks" ? c.overdueText : c.overdueBg, color: confirmAction === "selectedTasks" ? "#fff" : c.overdueText, opacity: cleanupTasks.size ? 1 : .45 }}>
+                  {confirmAction === "selectedTasks" ? "再点一次删除选中任务" : `删除选中任务（${cleanupTasks.size}）`}
+                </button>
+                <button disabled={cleanupDates.size === 0} onClick={() => armOrRun("selectedDates", () => { onClearDates(Array.from(cleanupDates)); exitCleanupMode(); })}
+                  style={{ fontSize: 10.5, padding: "7px 8px", borderRadius: 7, background: confirmAction === "selectedDates" ? c.overdueText : c.hover, color: confirmAction === "selectedDates" ? "#fff" : c.overdueText, opacity: cleanupDates.size ? 1 : .45 }}>
+                  {confirmAction === "selectedDates" ? "再点一次清空这些日期" : `清空所选 ${cleanupDates.size} 天全部任务`}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+                <div>
+                  <div style={{ fontSize: 15, fontWeight: 650, color: c.text }}>{displayDate(selectedDate)}</div>
+                  <div style={{ fontSize: 10.5, color: c.subtext }}>{WEEKDAYS[selectedDate.getDay()]} · {selectedTasks.length} 项</div>
+                </div>
+                <button onClick={() => onOpenDay(selectedDate)} style={{ fontSize: 11, padding: "5px 8px", borderRadius: 8, background: c.hover, color: c.text }}>打开当天</button>
+              </div>
+
+              {selectedIsPast && incompleteSelected.length > 0 && (
+                <button onClick={() => incompleteSelected.forEach((t) => onMoveTask(selectedKey, todayKey, t.id))}
+                  style={{ marginBottom: 8, padding: "7px 8px", borderRadius: 8, background: c.accent, color: c.accentText, fontSize: 11.5, fontWeight: 600 }}>
+                  全部未完成移到今天（{incompleteSelected.length}）
+                </button>
+              )}
+
+              <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+                {selectedTasks.length === 0 && <div style={{ fontSize: 12, color: c.subtext, padding: "20px 4px", textAlign: "center" }}>这一天没有任务</div>}
+                {selectedTasks.map((task) => (
+                  <div key={task.id} style={{ padding: "7px 7px", borderRadius: 8, background: task.done ? "transparent" : c.hover, marginBottom: 5, border: task.done ? `1px solid ${c.divider}` : "none" }}>
+                    <div className="flex items-start" style={{ gap: 6 }}>
+                      <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: task.done ? c.doneText : c.text, textDecoration: task.done ? "line-through" : "none", wordBreak: "break-word", lineHeight: 1.35 }}>{task.text}</div>
+                      <button onClick={() => onDeleteTask(task.id)} title="删除这项任务" style={{ color: c.overdueText, flexShrink: 0, display: "flex", padding: 2 }}><X size={12} /></button>
+                    </div>
+                    <div className="flex items-center justify-between" style={{ marginTop: 4, gap: 6 }}>
+                      <span style={{ fontSize: 9.5, color: c.subtext }}>{task.time ? `计划 ${task.time}` : "无计划时间"}</span>
+                      {selectedIsPast && !task.done && (
+                        <button onClick={() => onMoveTask(selectedKey, todayKey, task.id)} className="flex items-center" style={{ gap: 3, fontSize: 10.5, color: c.accent, fontWeight: 600 }}>
+                          移到今天 <ArrowRight size={11} />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ))}
-                {list.length > 2 && (
-                  <div style={{ fontSize: 7.5, textAlign: "center", color: isSelected ? c.accentText : c.subtext }}>+{list.length - 2}</div>
-                )}
               </div>
-            </div>
-          );
-        })}
-      </div>
 
-      <div style={{ borderTop: `1px solid ${c.divider}`, marginTop: 10, paddingTop: 9, display: "flex", flexDirection: "column", gap: 6 }}>
-        <div style={{ fontSize: 11, color: c.subtext }}>清理已安排的计划</div>
-        <button
-          onClick={() => armOrRun("day", () => onClearDay(dateKey(selectedDate)))}
-          style={{
-            fontSize: 11.5, padding: "7px 10px", borderRadius: 8, textAlign: "left",
-            background: confirmAction === "day" ? c.overdueBg : c.hover,
-            color: confirmAction === "day" ? c.overdueText : c.text,
-          }}
-        >
-          {confirmAction === "day" ? "确定清空？" : `清空所选这天的计划 · ${displayDate(selectedDate)}`}
-        </button>
-        <button
-          onClick={() => armOrRun("month", () => onClearMonth(monthDate.getFullYear(), monthDate.getMonth()))}
-          style={{
-            fontSize: 11.5, padding: "7px 10px", borderRadius: 8, textAlign: "left",
-            background: confirmAction === "month" ? c.overdueBg : c.hover,
-            color: confirmAction === "month" ? c.overdueText : c.text,
-          }}
-        >
-          {confirmAction === "month" ? "确定清空？" : `清空本月计划 · ${monthDate.getMonth() + 1}月`}
-        </button>
-        <button
-          onClick={() => armOrRun("all", onClearAll)}
-          style={{
-            fontSize: 12, padding: "8px 0", borderRadius: 8, fontWeight: 650,
-            background: confirmAction === "all" ? c.overdueText : c.overdueBg,
-            color: confirmAction === "all" ? "#FFFFFF" : c.overdueText,
-          }}
-        >
-          {confirmAction === "all" ? "再点一次，清空全部计划" : "清空全部计划"}
-        </button>
+              <div style={{ borderTop: `1px solid ${c.divider}`, marginTop: 8, paddingTop: 8, display: "flex", flexDirection: "column", gap: 5 }}>
+                <button onClick={() => armOrRun("day", () => onClearDay(selectedKey))} style={{ fontSize: 10.5, padding: "6px 8px", borderRadius: 7, background: confirmAction === "day" ? c.overdueBg : c.hover, color: confirmAction === "day" ? c.overdueText : c.subtext }}>{confirmAction === "day" ? "确定清空？" : "清空所选日期"}</button>
+                <button onClick={() => armOrRun("month", () => onClearMonth(monthDate.getFullYear(), monthDate.getMonth()))} style={{ fontSize: 10.5, padding: "6px 8px", borderRadius: 7, background: confirmAction === "month" ? c.overdueBg : c.hover, color: confirmAction === "month" ? c.overdueText : c.subtext }}>{confirmAction === "month" ? "确定清空？" : "清空本月计划"}</button>
+                <button onClick={() => armOrRun("all", onClearAll)} style={{ fontSize: 10.5, padding: "6px 8px", borderRadius: 7, background: confirmAction === "all" ? c.overdueText : c.overdueBg, color: confirmAction === "all" ? "#fff" : c.overdueText }}>{confirmAction === "all" ? "再点一次清空全部" : "清空全部计划"}</button>
+              </div>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -521,7 +571,9 @@ function RecordsModal({ c, sessions, onClose, onClear }) {
   const [cleanDate, setCleanDate] = useState("");
   const [cleanMonth, setCleanMonth] = useState("");
   const [confirmAction, setConfirmAction] = useState(null);
+  const [confirmRecordId, setConfirmRecordId] = useState(null);
   const confirmTimerRef = useRef(null);
+  const confirmRecordTimerRef = useRef(null);
   const fmtTime = (ts) => { const d = new Date(ts); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
   const fmtDur = (sec) => { const m = Math.floor(sec / 60), s = sec % 60; return m > 0 ? `${m}分${pad(s)}秒` : `${s}秒`; };
 
@@ -539,6 +591,17 @@ function RecordsModal({ c, sessions, onClose, onClear }) {
   const clearByDay = () => { if (!cleanDate) return; onClear((s) => toIsoDate(dateFromKey(s.dateKey)) !== cleanDate); };
   const clearByMonth = () => { if (!cleanMonth) return; onClear((s) => toIsoMonth(dateFromKey(s.dateKey)) !== cleanMonth); };
   const clearAll = () => onClear(() => false);
+  const deleteSingleRecord = (id) => {
+    if (confirmRecordId === id) {
+      if (confirmRecordTimerRef.current) clearTimeout(confirmRecordTimerRef.current);
+      setConfirmRecordId(null);
+      onClear((s) => s.id !== id);
+      return;
+    }
+    if (confirmRecordTimerRef.current) clearTimeout(confirmRecordTimerRef.current);
+    setConfirmRecordId(id);
+    confirmRecordTimerRef.current = setTimeout(() => setConfirmRecordId(null), 4000);
+  };
 
   const dateKeys = Array.from(new Set(sessions.map((s) => s.dateKey))).sort((a, b) => dateFromKey(b) - dateFromKey(a));
 
@@ -617,9 +680,22 @@ function RecordsModal({ c, sessions, onClose, onClear }) {
                   <span style={{ fontSize: 10.5, color: c.subtext }}>共 {fmtDur(total)}</span>
                 </div>
                 {list.map((s) => (
-                  <div key={s.id} className="flex items-center justify-between" style={{ fontSize: 11.5, color: c.subtext, padding: "3px 0" }}>
-                    <span style={{ color: c.text, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginRight: 8 }}>{s.taskText}</span>
+                  <div key={s.id} className="flex items-center justify-between" style={{ fontSize: 11.5, color: c.subtext, padding: "3px 0", gap: 6 }}>
+                    <span style={{ color: c.text, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginRight: 2 }}>{s.taskText}</span>
                     <span style={{ flexShrink: 0 }}>{fmtTime(s.start)}–{fmtTime(s.end)} · {fmtDur(s.seconds)}</span>
+                    <button
+                      onClick={() => deleteSingleRecord(s.id)}
+                      title={confirmRecordId === s.id ? "再点一次确认删除" : "删除这条记录"}
+                      style={{
+                        flexShrink: 0, minWidth: confirmRecordId === s.id ? 42 : 22, height: 22, padding: confirmRecordId === s.id ? "0 6px" : 0,
+                        borderRadius: 7, display: "flex", alignItems: "center", justifyContent: "center",
+                        background: confirmRecordId === s.id ? c.overdueBg : "transparent",
+                        color: confirmRecordId === s.id ? c.overdueText : c.subtext,
+                        fontSize: 10.5, transition: "all .15s ease",
+                      }}
+                    >
+                      {confirmRecordId === s.id ? "确定？" : <X size={12} />}
+                    </button>
                   </div>
                 ))}
               </div>
@@ -805,6 +881,71 @@ function CountdownManagerModal({ c, countdowns, onChange, onClose }) {
   );
 }
 
+/* ---------- 编辑任务 ---------- */
+function TaskEditModal({ c, task, onClose, onSave }) {
+  const [text, setText] = useState(task?.text || "");
+  const [time, setTime] = useState(task?.time || "");
+  const [note, setNote] = useState(task?.note || "");
+  const save = () => { const trimmed = text.trim(); if (trimmed) onSave({ text: trimmed, time: time || null, note: note.trim() }); };
+  return (
+    <div style={{ position: "absolute", inset: 0, background: "rgba(20,20,18,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 48 }}>
+      <div style={{ width: 300, background: c.window, borderRadius: 15, padding: 16, boxShadow: "0 20px 50px rgba(0,0,0,.35)" }}>
+        <div className="flex items-center justify-between" style={{ marginBottom: 12 }}><span style={{ fontSize: 14, fontWeight: 650, color: c.text }}>编辑任务</span><button onClick={onClose} style={{ color: c.subtext }}><X size={15} /></button></div>
+        <div style={{ fontSize: 11, color: c.subtext, marginBottom: 4 }}>任务内容</div>
+        <input autoFocus value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && save()} style={{ width: "100%", boxSizing: "border-box", fontSize: 13, padding: "8px 9px", borderRadius: 9, border: "none", outline: "none", background: c.inputBg, color: c.text, marginBottom: 10 }} />
+        <div style={{ fontSize: 11, color: c.subtext, marginBottom: 4 }}>计划时间（可留空）</div>
+        <input type="time" value={time} onChange={(e) => setTime(e.target.value)} style={{ width: "100%", boxSizing: "border-box", fontSize: 12, padding: "7px 9px", borderRadius: 9, border: "none", outline: "none", background: c.inputBg, color: c.text }} />
+        <div style={{ fontSize: 11, color: c.subtext, marginTop: 10, marginBottom: 4 }}>备注 / 任务细节（可留空）</div>
+        <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="例如：需要准备的资料、步骤、联系人、注意事项……"
+          style={{ width: "100%", height: 86, boxSizing: "border-box", resize: "vertical", fontSize: 12, lineHeight: 1.5, padding: "8px 9px", borderRadius: 9, border: "none", outline: "none", background: c.inputBg, color: c.text, fontFamily: "inherit" }} />
+        <div className="flex items-center" style={{ gap: 8, marginTop: 14 }}><button onClick={onClose} style={{ flex: 1, padding: "8px 0", borderRadius: 9, background: c.hover, color: c.text, fontSize: 12 }}>取消</button><button onClick={save} style={{ flex: 1, padding: "8px 0", borderRadius: 9, background: c.accent, color: c.accentText, fontSize: 12, fontWeight: 600 }}>保存</button></div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- 单项任务提醒 ---------- */
+function TaskReminderModal({ c, task, onClose, onSave }) {
+  const legacy = taskReminderTime(task) || "09:00";
+  const [enabled, setEnabled] = useState(task?.reminderEnabled !== false && !!taskReminderTime(task));
+  const [time, setTime] = useState(legacy);
+  return (
+    <div style={{ position: "absolute", inset: 0, background: "rgba(20,20,18,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 49 }}>
+      <div style={{ width: 300, background: c.window, borderRadius: 15, padding: 16, boxShadow: "0 20px 50px rgba(0,0,0,.35)" }}>
+        <div className="flex items-center justify-between"><span style={{ fontSize: 14, fontWeight: 650, color: c.text }}>任务闹钟</span><button onClick={onClose} style={{ color: c.subtext }}><X size={15} /></button></div>
+        <div style={{ fontSize: 12, color: c.text, marginTop: 10, marginBottom: 12, wordBreak: "break-word" }}>{task?.text}</div>
+        <label className="flex items-center" style={{ gap: 7, fontSize: 12, color: c.text, marginBottom: 10 }}><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> 开启这项任务的提醒</label>
+        <div style={{ fontSize: 11, color: c.subtext, marginBottom: 4 }}>几点提醒</div>
+        <input type="time" disabled={!enabled} value={time} onChange={(e) => setTime(e.target.value)} style={{ width: "100%", boxSizing: "border-box", fontSize: 13, padding: "8px 9px", borderRadius: 9, border: "none", outline: "none", background: c.inputBg, color: c.text, opacity: enabled ? 1 : .55 }} />
+        <div style={{ fontSize: 10.5, color: c.subtext, marginTop: 7 }}>到设定时间会弹出 Windows 系统通知。</div>
+        <div className="flex items-center" style={{ gap: 8, marginTop: 14 }}><button onClick={onClose} style={{ flex: 1, padding: "8px 0", borderRadius: 9, background: c.hover, color: c.text, fontSize: 12 }}>取消</button><button onClick={() => onSave({ reminderEnabled: enabled, reminderTime: enabled ? time : null })} style={{ flex: 1, padding: "8px 0", borderRadius: 9, background: c.accent, color: c.accentText, fontSize: 12, fontWeight: 600 }}>保存</button></div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- 提醒铃声 ---------- */
+function SoundSettingsModal({ c, settings, onChange, onClose, onTest }) {
+  const choose = async () => {
+    const result = await window.desktopAPI?.sound?.choose?.();
+    if (result?.ok) onChange({ mode: "custom", name: result.name || "自定义铃声" });
+  };
+  const useDefault = () => onChange({ mode: "default", name: "" });
+  return (
+    <div style={{ position: "absolute", inset: 0, background: "rgba(20,20,18,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }}>
+      <div style={{ width: 315, background: c.window, borderRadius: 15, padding: 16, boxShadow: "0 20px 50px rgba(0,0,0,.35)" }}>
+        <div className="flex items-center justify-between"><span style={{ fontSize: 14, fontWeight: 650, color: c.text }}>提醒铃声</span><button onClick={onClose} style={{ color: c.subtext }}><X size={15} /></button></div>
+        <button onClick={useDefault} style={{ width: "100%", textAlign: "left", marginTop: 12, padding: "9px 10px", borderRadius: 9, background: settings.mode === "default" ? c.accent : c.hover, color: settings.mode === "default" ? c.accentText : c.text, fontSize: 12 }}>Windows 默认提示音</button>
+        <button onClick={choose} style={{ width: "100%", textAlign: "left", marginTop: 7, padding: "9px 10px", borderRadius: 9, background: settings.mode === "custom" ? c.accent : c.hover, color: settings.mode === "custom" ? c.accentText : c.text, fontSize: 12 }}>
+          {settings.mode === "custom" ? `自定义：${settings.name || "已选择"}` : "选择自定义铃声…"}
+        </button>
+        <div style={{ fontSize: 10.5, color: c.subtext, marginTop: 8, lineHeight: 1.45 }}>支持 MP3、WAV、M4A、OGG。选择后会复制到软件自己的数据目录，原文件移动后也不受影响。</div>
+        {settings.mode === "custom" && <button onClick={onTest} style={{ width: "100%", marginTop: 10, padding: "7px 0", borderRadius: 8, background: c.hover, color: c.text, fontSize: 11.5 }}>试听铃声</button>}
+      </div>
+    </div>
+  );
+}
+
 /* ---------- 主组件 ---------- */
 export default function TodayApp() {
   const today = startOfDay(new Date());
@@ -826,6 +967,12 @@ export default function TodayApp() {
   const [countdowns, setCountdowns] = useState([]);
   const [showCountdownManager, setShowCountdownManager] = useState(false);
   const [showCustomTimer, setShowCustomTimer] = useState(false);
+  const [editingTaskId, setEditingTaskId] = useState(null);
+  const [reminderTaskId, setReminderTaskId] = useState(null);
+  const [showSoundSettings, setShowSoundSettings] = useState(false);
+  const [soundSettings, setSoundSettings] = useState({ mode: "default", name: "" });
+  const [taskListPrefs, setTaskListPrefs] = useState({ incompleteFirst: true, completedLast: true, onlyIncomplete: false });
+  const [runtimeCheckpoint, setRuntimeCheckpoint] = useState(0);
 
   const [totalSeconds, setTotalSeconds] = useState(25 * 60);
   const [remaining, setRemaining] = useState(25 * 60);
@@ -856,13 +1003,37 @@ export default function TodayApp() {
           ? await window.desktopAPI.state.get()
           : JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
         if (data && !cancelled) {
-          if (data.tasksByDate) setTasksByDate(data.tasksByDate);
-          if (Array.isArray(data.sessions)) setSessions(mergeTaskSessions(data.sessions));
+          if (typeof data.idCounter === "number") idRef.current = Math.max(idRef.current, data.idCounter);
+          const savedTasks = data.tasksByDate && typeof data.tasksByDate === "object" ? data.tasksByDate : null;
+          if (savedTasks) setTasksByDate(savedTasks);
+          let restoredSessions = normalizeSessions(data.sessions);
+          const runtime = data.timerRuntime;
+          if (runtime?.openSession?.taskId && Number(runtime.openSession.elapsedMs) > 0) {
+            restoredSessions = mergeSessionRecord(restoredSessions, {
+              id: nextId(), taskId: runtime.openSession.taskId, taskText: runtime.openSession.taskText || "",
+              dateKey: runtime.openSession.dateKey, start: runtime.openSession.startTime || runtime.savedAt || Date.now(),
+              end: runtime.savedAt || Date.now(), seconds: Math.max(1, Math.round(Number(runtime.openSession.elapsedMs) / 1000)),
+            });
+          }
+          setSessions(restoredSessions);
           if (Array.isArray(data.countdowns)) setCountdowns(data.countdowns);
-          if (data.taskTimerStates && typeof data.taskTimerStates === "object") setTaskTimerStates(data.taskTimerStates);
-          if (typeof data.idCounter === "number") idRef.current = data.idCounter;
+          const restoredTimerStates = data.taskTimerStates && typeof data.taskTimerStates === "object" ? { ...data.taskTimerStates } : {};
+          if (runtime?.activeTaskId && savedTasks) {
+            let exists = false;
+            for (const list of Object.values(savedTasks)) if (Array.isArray(list) && list.some((t) => t.id === runtime.activeTaskId && !t.done)) { exists = true; break; }
+            if (exists) {
+              const rr = Math.max(0, Math.floor(Number(runtime.remaining) || 0));
+              restoredTimerStates[runtime.activeTaskId] = rr;
+              setActiveTaskId(runtime.activeTaskId);
+              setRemaining(rr);
+              setRunning(false);
+            }
+          }
+          setTaskTimerStates(restoredTimerStates);
+          if (data.taskListPrefs && typeof data.taskListPrefs === "object") setTaskListPrefs((p) => ({ ...p, ...data.taskListPrefs }));
+          if (data.soundSettings && typeof data.soundSettings === "object") setSoundSettings({ mode: data.soundSettings.mode === "custom" ? "custom" : "default", name: data.soundSettings.name || "" });
           if (data.theme) setTheme(data.theme);
-          if (typeof data.totalSeconds === "number") { setTotalSeconds(data.totalSeconds); setRemaining(data.totalSeconds); }
+          if (typeof data.totalSeconds === "number") { setTotalSeconds(data.totalSeconds); if (!runtime?.activeTaskId) setRemaining(data.totalSeconds); }
         }
       } catch (e) {
         // 还没有历史数据，使用初始种子数据
@@ -876,18 +1047,39 @@ export default function TodayApp() {
   useEffect(() => {
     if (!loaded) return;
     const t = setTimeout(() => {
-      const payload = { tasksByDate, sessions, countdowns, taskTimerStates, idCounter: idRef.current, theme, totalSeconds };
-      if (window.desktopAPI?.state) {
-        window.desktopAPI.state.set(payload).catch(() => {});
-      } else {
-        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(payload)); } catch (e) {}
-      }
+      const timerRuntime = activeTaskId ? {
+        activeTaskId, running, remaining: currentRemainingSeconds(), savedAt: Date.now(),
+        openSession: openSession ? { ...openSession, elapsedMs: sessionElapsedMsRef.current } : null,
+      } : null;
+      const payload = { tasksByDate, sessions, countdowns, taskTimerStates, taskListPrefs, soundSettings, timerRuntime, idCounter: idRef.current, theme, totalSeconds };
+      if (window.desktopAPI?.state) window.desktopAPI.state.set(payload).catch(() => {});
+      else { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(payload)); } catch {} }
     }, 600);
     return () => clearTimeout(t);
-  }, [tasksByDate, sessions, countdowns, taskTimerStates, theme, totalSeconds, loaded]);
+  }, [tasksByDate, sessions, countdowns, taskTimerStates, taskListPrefs, soundSettings, theme, totalSeconds, loaded, activeTaskId, running, openSession, runtimeCheckpoint]);
+
+  useEffect(() => {
+    if (!running) return undefined;
+    const id = setInterval(() => setRuntimeCheckpoint((x) => x + 1), 5000);
+    return () => clearInterval(id);
+  }, [running]);
 
   const key = dateKey(selectedDate);
   const tasks = tasksByDate[key] || [];
+  const displayTasks = [...tasks]
+    .filter((t) => !taskListPrefs.onlyIncomplete || !t.done)
+    .sort((a, b) => {
+      if (a.id === activeTaskId && b.id !== activeTaskId) return -1;
+      if (b.id === activeTaskId && a.id !== activeTaskId) return 1;
+      if ((taskListPrefs.incompleteFirst || taskListPrefs.completedLast) && a.done !== b.done) return a.done ? 1 : -1;
+      const at = a.time || "99:99", bt = b.time || "99:99";
+      return at.localeCompare(bt);
+    });
+  const todayKeyForHistory = dateKey(today);
+  const pastIncomplete = Object.entries(tasksByDate).flatMap(([dk, list]) => {
+    if (startOfDay(dateFromKey(dk)) >= today) return [];
+    return (list || []).filter((t) => !t.done).map((task) => ({ task, dateKey: dk }));
+  });
   const nowHM = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
   const activeCountdowns = countdowns
     .filter((item) => item && item.enabled !== false)
@@ -939,56 +1131,64 @@ export default function TodayApp() {
   const finalizeSession = () => {
     if (!openSession) return;
     const seconds = Math.max(1, Math.round(sessionElapsedMsRef.current / 1000));
-    const endTime = Date.now();
-
-    // 同一个任务在同一天只保留一条记录。暂停、切换任务、再次继续时，
-    // 将新的专注时长累加到原记录，而不是新增第二条记录。
-    setSessions((prev) => {
-      const index = prev.findIndex((session) =>
-        session.taskId === openSession.taskId && session.dateKey === openSession.dateKey
-      );
-
-      if (index === -1) {
-        return [...prev, {
-          id: nextId(),
-          taskId: openSession.taskId,
-          taskText: openSession.taskText,
-          dateKey: openSession.dateKey,
-          start: openSession.startTime,
-          end: endTime,
-          seconds,
-        }];
-      }
-
-      const next = [...prev];
-      const existing = next[index];
-      next[index] = {
-        ...existing,
-        taskText: openSession.taskText || existing.taskText,
-        start: Number.isFinite(existing.start)
-          ? Math.min(existing.start, openSession.startTime)
-          : openSession.startTime,
-        end: Number.isFinite(existing.end)
-          ? Math.max(existing.end, endTime)
-          : endTime,
-        seconds: (existing.seconds || 0) + seconds,
-      };
-      return next;
-    });
-
+    const record = { id: nextId(), taskId: openSession.taskId, taskText: openSession.taskText, dateKey: openSession.dateKey, start: openSession.startTime, end: Date.now(), seconds };
+    setSessions((list) => mergeSessionRecord(list, record));
     setOpenSession(null);
     sessionElapsedMsRef.current = 0;
   };
 
+  const updateTaskById = (id, patch) => {
+    setTasksByDate((prev) => {
+      const next = { ...prev };
+      for (const dk of Object.keys(next)) {
+        const idx = (next[dk] || []).findIndex((t) => t.id === id);
+        if (idx >= 0) {
+          const list = [...next[dk]];
+          list[idx] = { ...list[idx], ...patch };
+          next[dk] = list;
+          break;
+        }
+      }
+      return next;
+    });
+    if (patch.text) {
+      setSessions((list) => list.map((x) => x.taskId === id ? { ...x, taskText: patch.text } : x));
+      setOpenSession((session) => session?.taskId === id ? { ...session, taskText: patch.text } : session);
+    }
+  };
+
+  const openEditTask = (id) => setEditingTaskId(id);
+  const openTaskReminder = (id) => setReminderTaskId(id);
+
   const toggleTask = (id) => {
-    setTasks((list) => list.map((t) => (t.id === id ? { ...t, done: !t.done } : t)));
-    clearTaskRemaining(id);
-    if (id === activeTaskId) {
+    const entry = findTaskEntry(id);
+    if (!entry) return;
+    const wasDone = !!entry.task.done;
+    const completedAt = Date.now();
+    if (!wasDone && id === activeTaskId) {
       finalizeSession();
       setRunning(false);
       timerDeadlineRef.current = null;
       lastTimerTickRef.current = null;
       setActiveTaskId(null);
+    }
+    setTasksByDate((prev) => {
+      const next = { ...prev };
+      const list = [...(next[entry.dateKey] || [])];
+      const idx = list.findIndex((t) => t.id === id);
+      if (idx >= 0) list[idx] = { ...list[idx], done: !wasDone };
+      next[entry.dateKey] = list;
+      return next;
+    });
+    clearTaskRemaining(id);
+    if (!wasDone) {
+      setSessions((list) => {
+        if (list.some((session) => session.taskId === id && session.dateKey === entry.dateKey)) return list;
+        return mergeSessionRecord(list, {
+          id: nextId(), taskId: id, taskText: entry.task.text, dateKey: entry.dateKey,
+          start: completedAt, end: completedAt, seconds: 0, completedOnly: true,
+        });
+      });
     }
   };
   const deleteTask = (id) => {
@@ -997,18 +1197,25 @@ export default function TodayApp() {
       setRunning(false);
       timerDeadlineRef.current = null;
       lastTimerTickRef.current = null;
-      clearTaskRemaining(id);
       setActiveTaskId(null);
     }
     clearTaskRemaining(id);
-    setTasks((list) => list.filter((t) => t.id !== id));
+    setTasksByDate((prev) => {
+      const next = { ...prev };
+      Object.keys(next).forEach((dk) => {
+        const filtered = (next[dk] || []).filter((t) => t.id !== id);
+        if (filtered.length) next[dk] = filtered; else delete next[dk];
+      });
+      return next;
+    });
+    setSessions((list) => list.filter((session) => session.taskId !== id));
   };
   const addTask = (raw, repeat = "none") => {
     const trimmed = raw.trim();
     if (!trimmed) return;
     const { time, text } = parseTaskLine(trimmed);
     if (repeat === "none") {
-      setTasks((list) => [...list, { id: nextId(), text, time, done: false, repeat: "none" }]);
+      setTasks((list) => [...list, { id: nextId(), text, time, note: "", reminderTime: time, reminderEnabled: !!time, done: false, repeat: "none" }]);
     } else {
       const dates = repeatDates(selectedDate, repeat);
       setTasksByDate((prev) => {
@@ -1016,7 +1223,7 @@ export default function TodayApp() {
         dates.forEach((d) => {
           const k2 = dateKey(d);
           const list = next[k2] ? [...next[k2]] : [];
-          list.push({ id: nextId(), text, time, done: false, repeat });
+          list.push({ id: nextId(), text, time, note: "", reminderTime: time, reminderEnabled: !!time, done: false, repeat });
           next[k2] = list;
         });
         return next;
@@ -1024,7 +1231,7 @@ export default function TodayApp() {
     }
   };
   const addFromTemplate = (tpl) => {
-    setTasks((list) => [...list, { id: nextId(), text: tpl.text, time: tpl.time, done: false, repeat: tpl.repeat }]);
+    setTasks((list) => [...list, { id: nextId(), text: tpl.text, time: tpl.time, note: "", reminderTime: tpl.time || null, reminderEnabled: !!tpl.time, done: false, repeat: tpl.repeat }]);
     setAdding(false);
   };
   const addBatch = (dateKeys, parsedLines) => {
@@ -1032,7 +1239,7 @@ export default function TodayApp() {
       const next = { ...prev };
       dateKeys.forEach((k2) => {
         const list = next[k2] ? [...next[k2]] : [];
-        parsedLines.forEach((p) => list.push({ id: nextId(), text: p.text, time: p.time, done: false, repeat: p.repeat || "none" }));
+        parsedLines.forEach((p) => list.push({ id: nextId(), text: p.text, time: p.time, note: "", reminderTime: p.time, reminderEnabled: !!p.time, done: false, repeat: p.repeat || "none" }));
         next[k2] = list;
       });
       return next;
@@ -1040,13 +1247,22 @@ export default function TodayApp() {
     setShowBatchModal(false);
   };
   const clearSessions = (keepPredicate) => setSessions((s) => s.filter(keepPredicate));
-  const clearTasksForDate = (k) => setTasksByDate((prev) => { const next = { ...prev }; delete next[k]; return next; });
-  const clearTasksForMonth = (year, month) => setTasksByDate((prev) => {
-    const next = { ...prev };
-    Object.keys(next).forEach((k) => { const d = dateFromKey(k); if (d.getFullYear() === year && d.getMonth() === month) delete next[k]; });
-    return next;
-  });
-  const clearAllTasks = () => setTasksByDate({});
+  const clearTaskDates = (dateKeys) => {
+    const keys = new Set(dateKeys);
+    const ids = new Set(Object.entries(tasksByDate).flatMap(([dk, list]) => keys.has(dk) ? (list || []).map((t) => t.id) : []));
+    if (activeTaskId && ids.has(activeTaskId)) {
+      finalizeSession(); setRunning(false); timerDeadlineRef.current = null; lastTimerTickRef.current = null; setActiveTaskId(null);
+    }
+    ids.forEach((id) => clearTaskRemaining(id));
+    setTasksByDate((prev) => { const next = { ...prev }; keys.forEach((dk) => delete next[dk]); return next; });
+    setSessions((list) => list.filter((session) => !ids.has(session.taskId)));
+  };
+  const clearTasksForDate = (k) => clearTaskDates([k]);
+  const clearTasksForMonth = (year, month) => {
+    const keys = Object.keys(tasksByDate).filter((k) => { const d = dateFromKey(k); return d.getFullYear() === year && d.getMonth() === month; });
+    clearTaskDates(keys);
+  };
+  const clearAllTasks = () => clearTaskDates(Object.keys(tasksByDate));
   const moveTaskToDate = (fromKey, toKey, taskId) => {
     if (fromKey === toKey) return;
     setTasksByDate((prev) => {
@@ -1202,11 +1418,15 @@ export default function TodayApp() {
   const buildFloatSnapshot = () => ({
     now: now.getTime(),
     theme,
-    tasks: (tasksByDate[dateKey(today)] || []).map((task) => ({
-      ...task,
-      focusSeconds: focusSecondsByTask[task.id] || 0,
-      pausedRemaining: taskTimerStates[task.id],
-    })),
+    tasks: [...(tasksByDate[dateKey(today)] || [])]
+      .filter((task) => !task.done)
+      .sort((a, b) => {
+        if (a.id === activeTaskId && b.id !== activeTaskId) return -1;
+        if (b.id === activeTaskId && a.id !== activeTaskId) return 1;
+        if ((taskListPrefs.incompleteFirst || taskListPrefs.completedLast) && a.done !== b.done) return a.done ? 1 : -1;
+        return 0;
+      })
+      .map((task) => ({ ...task, focusSeconds: focusSecondsByTask[task.id] || 0, pausedRemaining: taskTimerStates[task.id] })),
     remaining,
     running,
     activeTaskId,
@@ -1265,6 +1485,17 @@ export default function TodayApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTaskId, running, openSession, remaining, totalSeconds, tasksByDate, selectedDate]);
 
+  const playReminderSound = async () => {
+    if (soundSettings.mode !== "custom") return;
+    try {
+      const result = await window.desktopAPI?.sound?.getDataUrl?.();
+      if (!result?.dataUrl) return;
+      const audio = new Audio(result.dataUrl);
+      audio.volume = 1;
+      await audio.play();
+    } catch {}
+  };
+
   const pushToast = (text) => {
     const id = Date.now() + Math.random();
     setToasts((ts) => [...ts, { id, text }]);
@@ -1279,15 +1510,16 @@ export default function TodayApp() {
 
   useEffect(() => {
     if (!loaded || !window.desktopAPI?.reminders?.update) return;
-    window.desktopAPI.reminders.update({ tasksByDate, countdowns }).catch(() => {});
-  }, [loaded, tasksByDate, countdowns]);
+    window.desktopAPI.reminders.update({ tasksByDate, countdowns, soundMode: soundSettings.mode }).catch(() => {});
+  }, [loaded, tasksByDate, countdowns, soundSettings.mode]);
 
   useEffect(() => {
     if (!window.desktopAPI?.reminders?.onEvent) return undefined;
     return window.desktopAPI.reminders.onEvent((event) => {
       if (!event) return;
+      playReminderSound();
       if (event.type === "task") {
-        pushToast(`到点了：${event.text}（应在 ${event.time} 前完成）`);
+        pushToast(`任务提醒：${event.text}（${event.time}）`);
       } else if (event.type === "countdown-before") {
         pushToast(`距离${event.title}还有 ${event.minutes} 分钟`);
       } else if (event.type === "countdown-due") {
@@ -1298,7 +1530,7 @@ export default function TodayApp() {
         setShowReminderModal(list.length > 0);
       }
     });
-  }, []);
+  }, [soundSettings.mode]);
 
   useEffect(() => {
     if (!window.desktopAPI?.notifications?.onClick) return undefined;
@@ -1310,6 +1542,11 @@ export default function TodayApp() {
     });
   }, []);
 
+  useEffect(() => {
+    const result = window.desktopAPI?.windowMode?.setCalendar?.(view === "calendar");
+    result?.catch?.(() => {});
+  }, [view]);
+
   const testReminder = () => {
     const todayKey = dateKey(today);
     const incomplete = (tasksByDate[todayKey] || []).filter((t) => !t.done);
@@ -1319,9 +1556,8 @@ export default function TodayApp() {
       const body = incomplete.length > 0
         ? `还有 ${incomplete.length} 项任务未完成，抓紧完成吧！`
         : "今天的任务都完成啦，辛苦了！";
-      if (window.desktopAPI?.notify) {
-        window.desktopAPI.notify("今日待办提醒（测试）", body).catch(() => {});
-      }
+      if (soundSettings.mode === "custom") playReminderSound();
+      if (window.desktopAPI?.notify) window.desktopAPI.notify("今日待办提醒（测试）", body).catch(() => {});
     } catch (e) {}
   };
 
@@ -1337,13 +1573,13 @@ export default function TodayApp() {
 
   return (
     <div
-      style={{ background: c.bg, minHeight: 660, fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif" }}
-      className="flex items-center justify-center p-6 relative"
+      style={{ background: c.bg, minHeight: view === "calendar" ? 760 : 660, padding: 12, fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif" }}
+      className="flex items-center justify-center relative"
     >
       {/* ---------- 主窗口 ---------- */}
       <div
         style={{
-          width: 380, height: 660, background: c.window, borderRadius: 20,
+          width: view === "calendar" ? "min(820px, calc(100vw - 24px))" : 380, height: view === "calendar" ? "min(730px, calc(100vh - 24px))" : 660, background: c.window, borderRadius: 20,
           boxShadow: "0 24px 60px -20px rgba(0,0,0,0.25)",
           display: "flex", flexDirection: "column", overflow: "hidden",
           border: `1px solid ${theme === "light" ? "#ffffff" : c.divider}`,
@@ -1363,6 +1599,7 @@ export default function TodayApp() {
             </IconButton>
             <IconButton c={c} onClick={() => setShowRecords(true)} title="任务记录"><ClipboardList size={15} /></IconButton>
             <IconButton c={c} onClick={openFloatingWindow} title="打开独立悬浮窗"><PictureInPicture2 size={15} /></IconButton>
+            <IconButton c={c} onClick={() => setShowSoundSettings(true)} title="提醒铃声" active={soundSettings.mode === "custom"}><Volume2 size={15} /></IconButton>
             <IconButton c={c} onClick={() => setTheme(theme === "light" ? "dark" : "light")} title="切换主题">
               {theme === "light" ? <Moon size={15} /> : <Sun size={15} />}
             </IconButton>
@@ -1401,75 +1638,51 @@ export default function TodayApp() {
                 <IconButton c={c} onClick={() => setSelectedDate((d) => addDays(d, 1))} title="后一天"><ChevronRight size={18} /></IconButton>
               </div>
 
-              {/* 任务列表 */}
-              <div className="flex-1 overflow-y-auto" style={{ padding: "0 18px" }}>
-                {tasks.length === 0 && !adding && (
-                  <div style={{ color: c.subtext, fontSize: 13, padding: "24px 4px", textAlign: "center" }}>这一天还没有任务</div>
-                )}
-                {tasks.map((t) => {
-                  const overdue = !!(t.time && !t.done && key === dateKey(today) && nowHM > t.time);
-                  return (
-                    <TaskRow
-                      key={t.id} task={t} c={c}
-                      onToggle={toggleTask} onDelete={deleteTask} onAction={handleRowAction}
-                      isActive={t.id === activeTaskId} isRunning={running} overdue={overdue}
-                      focusSeconds={focusSecondsByTask[t.id] || 0}
-                    />
-                  );
-                })}
-
-                {adding ? (
-                  <div style={{ padding: "6px 4px 10px" }}>
-                    {repeatTemplates.length > 0 && (
-                      <select
-                        value=""
-                        onChange={(e) => { const idx = e.target.value; if (idx !== "") addFromTemplate(repeatTemplates[Number(idx)]); }}
-                        style={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 8, background: c.inputBg, color: c.text, border: "none", outline: "none", marginBottom: 8 }}
-                      >
-                        <option value="">从已有的重复任务中选择…</option>
-                        {repeatTemplates.map((tpl, i) => (
-                          <option key={i} value={i}>{tpl.time ? `${tpl.time} ` : ""}{tpl.text}（{REPEAT_LABELS[tpl.repeat]}）</option>
-                        ))}
-                      </select>
-                    )}
-                    <div className="flex items-center" style={{ gap: 12 }}>
-                      <div style={{ width: 20, height: 20, borderRadius: "9999px", border: `2px dashed ${c.subtext}`, flexShrink: 0 }} />
-                      <input
-                        autoFocus
-                        value={draft}
-                        onChange={(e) => setDraft(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") { addTask(draft, repeatOption); setDraft(""); setRepeatOption("none"); }
-                          if (e.key === "Escape") { setAdding(false); setDraft(""); setRepeatOption("none"); }
-                        }}
-                        placeholder="输入任务，可加时间前缀，如 18:00 交报告"
-                        style={{ flex: 1, fontSize: 14, background: "transparent", outline: "none", color: c.text, border: "none" }}
-                      />
-                    </div>
-                    <div className="flex items-center justify-between" style={{ marginTop: 8, paddingLeft: 32 }}>
-                      <select
-                        value={repeatOption}
-                        onChange={(e) => setRepeatOption(e.target.value)}
-                        style={{ fontSize: 11, padding: "4px 8px", borderRadius: 8, background: c.inputBg, color: c.text, border: "none", outline: "none" }}
-                      >
-                        <option value="none">不重复</option>
-                        <option value="daily">每天重复</option>
-                        <option value="weekly">每周重复</option>
-                        <option value="weekdays">工作日重复</option>
-                      </select>
-                      <button
-                        onClick={() => { addTask(draft, repeatOption); setDraft(""); setRepeatOption("none"); setAdding(false); }}
-                        style={{ fontSize: 11.5, color: c.accent, fontWeight: 650 }}
-                      >
-                        确定
-                      </button>
-                    </div>
+              {/* 任务列表：添加入口固定在顶部，支持自动排序与仅看未完成 */}
+              <div className="flex-1" style={{ padding: "0 18px", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+                <div style={{ flexShrink: 0, paddingBottom: 7, borderBottom: `1px solid ${c.divider}` }}>
+                  <div className="flex items-center" style={{ gap: 5, flexWrap: "wrap" }}>
+                    <button onClick={() => setAdding((v) => !v)} className="flex items-center" style={{ gap: 5, padding: "6px 9px", borderRadius: 8, background: c.accent, color: c.accentText, fontSize: 11.5, fontWeight: 600 }}><Plus size={13} /> 添加任务</button>
+                    <button onClick={() => setTaskListPrefs((p) => ({ ...p, incompleteFirst: !p.incompleteFirst }))} style={{ padding: "6px 7px", borderRadius: 8, background: taskListPrefs.incompleteFirst ? c.hover : "transparent", color: taskListPrefs.incompleteFirst ? c.text : c.subtext, fontSize: 10.5 }}>未完成置顶</button>
+                    <button onClick={() => setTaskListPrefs((p) => ({ ...p, completedLast: !p.completedLast }))} style={{ padding: "6px 7px", borderRadius: 8, background: taskListPrefs.completedLast ? c.hover : "transparent", color: taskListPrefs.completedLast ? c.text : c.subtext, fontSize: 10.5 }}>已完成置底</button>
+                    <button onClick={() => setTaskListPrefs((p) => ({ ...p, onlyIncomplete: !p.onlyIncomplete }))} style={{ padding: "6px 7px", borderRadius: 8, background: taskListPrefs.onlyIncomplete ? c.accent : c.hover, color: taskListPrefs.onlyIncomplete ? c.accentText : c.subtext, fontSize: 10.5 }}>仅未完成</button>
                   </div>
-                ) : (
-                  <button onClick={() => setAdding(true)} className="flex items-center" style={{ gap: 8, padding: "10px 4px", color: c.subtext, fontSize: 13.5, width: "100%" }}>
-                    <Plus size={15} /> 添加任务
-                  </button>
-                )}
+                  {key === todayKeyForHistory && pastIncomplete.length > 0 && (
+                    <button onClick={() => { const latest = [...pastIncomplete].sort((a,b) => dateFromKey(b.dateKey) - dateFromKey(a.dateKey))[0]; if (latest) { setSelectedDate(dateFromKey(latest.dateKey)); setCalendarMonth(dateFromKey(latest.dateKey)); setView("calendar"); } }}
+                      style={{ marginTop: 6, width: "100%", padding: "6px 8px", borderRadius: 8, background: c.overdueBg, color: c.overdueText, fontSize: 10.5, textAlign: "left" }}>
+                      还有 {pastIncomplete.length} 项历史未完成任务 · 点此处理
+                    </button>
+                  )}
+
+                  {adding && (
+                    <div style={{ padding: "8px 2px 2px" }}>
+                      {repeatTemplates.length > 0 && (
+                        <select value="" onChange={(e) => { const idx = e.target.value; if (idx !== "") addFromTemplate(repeatTemplates[Number(idx)]); }} style={{ width: "100%", fontSize: 11.5, padding: "6px 8px", borderRadius: 8, background: c.inputBg, color: c.text, border: "none", outline: "none", marginBottom: 7 }}>
+                          <option value="">从已有重复任务中选择…</option>
+                          {repeatTemplates.map((tpl, i) => <option key={i} value={i}>{tpl.time ? `${tpl.time} ` : ""}{tpl.text}（{REPEAT_LABELS[tpl.repeat]}）</option>)}
+                        </select>
+                      )}
+                      <div className="flex items-center" style={{ gap: 8 }}>
+                        <input autoFocus value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { addTask(draft, repeatOption); setDraft(""); setRepeatOption("none"); } if (e.key === "Escape") { setAdding(false); setDraft(""); setRepeatOption("none"); } }} placeholder="输入任务，可加时间，如 18:00 交报告" style={{ flex: 1, minWidth: 0, fontSize: 13, padding: "7px 8px", borderRadius: 8, background: c.inputBg, outline: "none", color: c.text, border: "none" }} />
+                        <button onClick={() => { addTask(draft, repeatOption); setDraft(""); setRepeatOption("none"); }} style={{ padding: "7px 9px", borderRadius: 8, background: c.accent, color: c.accentText, fontSize: 11.5 }}>添加</button>
+                      </div>
+                      <div className="flex items-center justify-between" style={{ marginTop: 6 }}>
+                        <select value={repeatOption} onChange={(e) => setRepeatOption(e.target.value)} style={{ fontSize: 10.5, padding: "4px 7px", borderRadius: 7, background: c.inputBg, color: c.text, border: "none", outline: "none" }}><option value="none">不重复</option><option value="daily">每天重复</option><option value="weekly">每周重复</option><option value="weekdays">工作日重复</option></select>
+                        <button onClick={() => { setAdding(false); setDraft(""); setRepeatOption("none"); }} style={{ fontSize: 10.5, color: c.subtext }}>收起</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex-1 overflow-y-auto" style={{ paddingTop: 6 }}>
+                  {displayTasks.length === 0 && !adding && (
+                    <div style={{ color: c.subtext, fontSize: 13, padding: "24px 4px", textAlign: "center" }}>{taskListPrefs.onlyIncomplete && tasks.some((t) => t.done) ? "没有未完成任务" : "这一天还没有任务"}</div>
+                  )}
+                  {displayTasks.map((t) => {
+                    const overdue = !!(t.time && !t.done && key === dateKey(today) && nowHM > t.time);
+                    return <TaskRow key={t.id} task={t} c={c} onToggle={toggleTask} onDelete={deleteTask} onAction={handleRowAction} onEdit={openEditTask} onReminder={openTaskReminder} isActive={t.id === activeTaskId} isRunning={running} overdue={overdue} focusSeconds={focusSecondsByTask[t.id] || 0} />;
+                  })}
+                </div>
               </div>
             </>
           ) : (
@@ -1477,9 +1690,12 @@ export default function TodayApp() {
               <CalendarView
                 monthDate={calendarMonth} setMonthDate={setCalendarMonth}
                 selectedDate={selectedDate} today={today} tasksByDate={tasksByDate} c={c}
-                onSelectDate={(d) => { setSelectedDate(d); setView("day"); }}
+                onSelectDate={(d) => setSelectedDate(d)}
+                onOpenDay={(d) => { setSelectedDate(d); setView("day"); }}
                 onMoveTask={moveTaskToDate}
+                onDeleteTask={deleteTask}
                 onClearDay={clearTasksForDate}
+                onClearDates={clearTaskDates}
                 onClearMonth={clearTasksForMonth}
                 onClearAll={clearAllTasks}
               />
@@ -1487,7 +1703,8 @@ export default function TodayApp() {
           )}
         </div>
 
-        {/* 专注计时器 */}
+        {view === "day" && (
+          <div>
         <div style={{ borderTop: `1px solid ${c.divider}`, padding: "12px 18px 16px" }}>
           {activeTask && (
             <div className="flex items-center justify-center" style={{ gap: 6, marginBottom: 8, fontSize: 11, color: c.subtext }}>
@@ -1523,6 +1740,9 @@ export default function TodayApp() {
           </div>
         </div>
 
+          </div>
+        )}
+
         {/* 提醒 toast */}
         {toasts.length > 0 && (
           <div style={{ position: "absolute", left: 14, right: 14, bottom: 178, display: "flex", flexDirection: "column", gap: 6, zIndex: 35 }}>
@@ -1534,6 +1754,9 @@ export default function TodayApp() {
           </div>
         )}
 
+        {editingTaskId && <TaskEditModal c={c} task={findTaskById(editingTaskId)} onClose={() => setEditingTaskId(null)} onSave={(patch) => { updateTaskById(editingTaskId, patch); setEditingTaskId(null); }} />}
+        {reminderTaskId && <TaskReminderModal c={c} task={findTaskById(reminderTaskId)} onClose={() => setReminderTaskId(null)} onSave={(patch) => { updateTaskById(reminderTaskId, patch); setReminderTaskId(null); }} />}
+        {showSoundSettings && <SoundSettingsModal c={c} settings={soundSettings} onChange={setSoundSettings} onClose={() => setShowSoundSettings(false)} onTest={playReminderSound} />}
         {showCustomTimer && <CustomTimerModal c={c} currentMinutes={Math.floor(totalSeconds / 60)} onClose={() => setShowCustomTimer(false)} onApply={(minutes) => { applyPreset(minutes); setShowCustomTimer(false); }} />}
         {showCountdownManager && <CountdownManagerModal c={c} countdowns={countdowns} onChange={setCountdowns} onClose={() => setShowCountdownManager(false)} />}
         {showBatchModal && <BatchAddModal c={c} today={today} initialDate={selectedDate} onClose={() => setShowBatchModal(false)} onSubmit={addBatch} />}

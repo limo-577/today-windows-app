@@ -1,0 +1,21 @@
+Today v1.5.3 replacement patch
+
+Replace these files in your current v1.5.x source project:
+- src/TodayApp.jsx
+- src/FloatWindow.jsx
+- electron/main.cjs
+- package.json
+- package-lock.json
+
+No new npm dependency was added.
+After replacement, rebuild with:
+  npm run build:portable
+or:
+  npm run build:windows
+
+Changes:
+1. Checking a task complete now creates a task record even when the timer was never started. It appears as 0 seconds.
+2. Float window is compact: current time + incomplete tasks only. Date, target countdown and bottom Pomodoro timer are hidden.
+3. Calendar multi-day cleanup mode: select arbitrary dates, then delete selected tasks across those dates or clear all tasks in the selected dates.
+4. Calendar day detail gives each task a direct delete button.
+5. Task deletion / date cleanup also removes matching task records.
