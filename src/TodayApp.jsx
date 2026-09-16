@@ -49,6 +49,61 @@ const repeatDates = (baseDate, type) => {
   return dates;
 };
 const REPEAT_LABELS = { daily: "每天重复", weekly: "每周重复", weekdays: "工作日重复" };
+const WEEKDAY_SHORT = ["日", "一", "二", "三", "四", "五", "六"];
+const makeRepeatPlanId = (prefix = "rp") => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const repeatPlanLabel = (plan) => {
+  if (!plan || plan.repeat === "none") return "不重复";
+  if (plan.repeat === "daily") return "每天";
+  if (plan.repeat === "weekdays") return "工作日";
+  if (plan.repeat === "weekly") {
+    const days = Array.isArray(plan.weekdays) && plan.weekdays.length ? plan.weekdays : [];
+    return days.length ? `每周${days.map((d) => WEEKDAY_SHORT[d]).join("/")}` : "每周";
+  }
+  return REPEAT_LABELS[plan.repeat] || "重复";
+};
+const migrateRepeatPlans = (rawTasks, rawPlans) => {
+  const tasksByDate = {};
+  Object.entries(rawTasks && typeof rawTasks === "object" ? rawTasks : {}).forEach(([dk, list]) => {
+    tasksByDate[dk] = (Array.isArray(list) ? list : []).map((task) => ({ ...task }));
+  });
+  const repeatPlans = (Array.isArray(rawPlans) ? rawPlans : []).map((plan) => ({
+    ...plan,
+    enabled: plan.enabled !== false,
+    weekdays: Array.isArray(plan.weekdays) ? [...plan.weekdays] : [],
+  }));
+  const known = new Set(repeatPlans.map((plan) => String(plan.id)));
+  const groups = new Map();
+  Object.entries(tasksByDate).forEach(([dk, list]) => {
+    list.forEach((task, index) => {
+      if (!task?.repeat || task.repeat === "none") return;
+      if (task.repeatPlanId && known.has(String(task.repeatPlanId))) return;
+      const signature = `${task.text || ""}__${task.time || ""}__${task.repeat}`;
+      if (!groups.has(signature)) groups.set(signature, []);
+      groups.get(signature).push({ dk, index, task });
+    });
+  });
+  groups.forEach((rows) => {
+    if (!rows.length) return;
+    const first = rows[0].task;
+    const id = makeRepeatPlanId("legacy");
+    const dates = rows.map((row) => dateFromKey(row.dk)).sort((a, b) => a - b);
+    const weekdaySet = new Set(dates.map((d) => d.getDay()));
+    const weekdays = first.repeat === "weekdays" ? [1, 2, 3, 4, 5] : first.repeat === "weekly" ? Array.from(weekdaySet).sort((a, b) => a - b) : [];
+    repeatPlans.push({
+      id,
+      text: first.text || "",
+      time: first.time || null,
+      repeat: first.repeat,
+      enabled: true,
+      startDate: dates.length ? toIsoDate(dates[0]) : "",
+      endDate: dates.length ? toIsoDate(dates[dates.length - 1]) : "",
+      weekdays,
+      legacy: true,
+    });
+    rows.forEach(({ dk, index }) => { tasksByDate[dk][index].repeatPlanId = id; });
+  });
+  return { tasksByDate, repeatPlans };
+};
 const formatFocusTime = (sec) => {
   const total = Math.max(0, Math.floor(sec || 0));
   const h = Math.floor(total / 3600);
@@ -432,13 +487,23 @@ function CalendarView({ monthDate, setMonthDate, selectedDate, today, tasksByDat
 }
 
 /* ---------- 批量添加计划弹窗 ---------- */
-function BatchAddModal({ c, onClose, onSubmit, initialDate, today }) {
+function BatchAddModal({ c, onClose, onSubmit, initialDate, today, repeatPlans, onUpdatePlan, onDeletePlan, onTogglePlan }) {
   const [text, setText] = useState("");
   const [monthDate, setMonthDate] = useState(initialDate);
   const [selected, setSelected] = useState(new Set([dateKey(initialDate)]));
   const [repeat, setRepeat] = useState("none");
+  const [weeklyDays, setWeeklyDays] = useState([initialDate.getDay()]);
+  const [rangeOpen, setRangeOpen] = useState(false);
+  const [rangeStart, setRangeStart] = useState(toIsoDate(initialDate));
+  const [rangeEnd, setRangeEnd] = useState(toIsoDate(addDays(initialDate, 29)));
+  const [rangeError, setRangeError] = useState("");
+  const [showPlans, setShowPlans] = useState(false);
+  const [editingPlanId, setEditingPlanId] = useState(null);
+  const [planDraft, setPlanDraft] = useState(null);
+  const [confirmDeletePlanId, setConfirmDeletePlanId] = useState(null);
 
   const cells = buildMonthGrid(monthDate);
+  const normalizedPlans = Array.isArray(repeatPlans) ? repeatPlans : [];
   const toggleDate = (d) => {
     const k = dateKey(d);
     setSelected((prev) => {
@@ -447,21 +512,101 @@ function BatchAddModal({ c, onClose, onSubmit, initialDate, today }) {
       return next;
     });
   };
+  const dateFitsRepeat = (d, repeatType = repeat, days = weeklyDays) => {
+    if (repeatType === "weekdays") return d.getDay() !== 0 && d.getDay() !== 6;
+    if (repeatType === "weekly") return days.includes(d.getDay());
+    return true;
+  };
+  const selectRange = (from, to, repeatType = repeat, days = weeklyDays) => {
+    const start = startOfDay(from), finish = startOfDay(to);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(finish.getTime()) || finish < start) {
+      setRangeError("结束日期不能早于开始日期");
+      return;
+    }
+    const span = Math.floor((finish - start) / 86400000) + 1;
+    if (span > 1095) {
+      setRangeError("一次最多选择3年范围，请缩短日期范围");
+      return;
+    }
+    const next = new Set();
+    for (let i = 0; i < span; i += 1) {
+      const d = addDays(start, i);
+      if (dateFitsRepeat(d, repeatType, days)) next.add(dateKey(d));
+    }
+    setSelected(next);
+    setMonthDate(new Date(start.getFullYear(), start.getMonth(), 1));
+    setRangeError(next.size ? "" : "当前重复条件下没有可用日期");
+  };
   const quickSelect = (mode) => {
-    if (mode === "today") setSelected(new Set([dateKey(today)]));
-    if (mode === "tomorrow") setSelected(new Set([dateKey(addDays(today, 1))]));
-    if (mode === "week") setSelected(new Set(Array.from({ length: 7 }, (_, i) => dateKey(addDays(today, i)))));
-    if (mode === "clear") setSelected(new Set());
+    setRangeError("");
+    if (mode === "today") { setSelected(new Set([dateKey(today)])); setMonthDate(new Date(today.getFullYear(), today.getMonth(), 1)); return; }
+    if (mode === "tomorrow") { const d = addDays(today, 1); setSelected(new Set([dateKey(d)])); setMonthDate(new Date(d.getFullYear(), d.getMonth(), 1)); return; }
+    if (mode === "week") { selectRange(today, addDays(today, 6)); return; }
+    if (mode === "month") { selectRange(today, addDays(today, 29)); return; }
+    if (mode === "custom") { setRangeOpen((v) => !v); }
+  };
+  const toggleWeeklyDay = (day, editing = false) => {
+    if (editing) {
+      setPlanDraft((prev) => {
+        const current = Array.isArray(prev?.weekdays) ? prev.weekdays : [];
+        const weekdays = current.includes(day) ? current.filter((x) => x !== day) : [...current, day].sort((a, b) => a - b);
+        return { ...prev, weekdays };
+      });
+      return;
+    }
+    setWeeklyDays((prev) => prev.includes(day) ? prev.filter((x) => x !== day) : [...prev, day].sort((a, b) => a - b));
+  };
+  const handleRepeatChange = (value) => {
+    setRepeat(value);
+    if (value === "weekly" && weeklyDays.length === 0) setWeeklyDays([initialDate.getDay()]);
   };
   const handleSubmit = () => {
     const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
     if (lines.length === 0 || selected.size === 0) return;
-    onSubmit(Array.from(selected), lines.map((l) => ({ ...parseTaskLine(l), repeat })));
+    if (repeat === "weekly" && weeklyDays.length === 0) { setRangeError("每周重复至少选择一个星期"); return; }
+    const sortedKeys = Array.from(selected).sort((a, b) => dateFromKey(a) - dateFromKey(b));
+    const startDate = sortedKeys.length ? toIsoDate(dateFromKey(sortedKeys[0])) : "";
+    const endDate = sortedKeys.length ? toIsoDate(dateFromKey(sortedKeys[sortedKeys.length - 1])) : "";
+    const plans = [];
+    const parsedLines = lines.map((line) => {
+      const parsed = parseTaskLine(line);
+      if (repeat === "none") return { ...parsed, repeat: "none" };
+      const repeatPlanId = makeRepeatPlanId();
+      const planWeekdays = repeat === "weekdays" ? [1, 2, 3, 4, 5] : repeat === "weekly" ? [...weeklyDays] : [];
+      plans.push({ id: repeatPlanId, text: parsed.text, time: parsed.time, repeat, enabled: true, startDate, endDate, weekdays: planWeekdays });
+      return { ...parsed, repeat, repeatPlanId };
+    });
+    onSubmit(sortedKeys, parsedLines, plans);
   };
+  const beginPlanEdit = (plan) => {
+    setEditingPlanId(plan.id);
+    setPlanDraft({ ...plan, time: plan.time || "", weekdays: Array.isArray(plan.weekdays) ? [...plan.weekdays] : [] });
+    setConfirmDeletePlanId(null);
+  };
+  const savePlanEdit = () => {
+    if (!planDraft || !editingPlanId) return;
+    const textValue = String(planDraft.text || "").trim();
+    if (!textValue) return;
+    if (planDraft.repeat === "weekly" && (!Array.isArray(planDraft.weekdays) || planDraft.weekdays.length === 0)) return;
+    onUpdatePlan(editingPlanId, { ...planDraft, text: textValue, time: planDraft.time || null });
+    setEditingPlanId(null);
+    setPlanDraft(null);
+  };
+  const requestDeletePlan = (id) => {
+    if (confirmDeletePlanId === id) {
+      onDeletePlan(id);
+      setConfirmDeletePlanId(null);
+      if (editingPlanId === id) { setEditingPlanId(null); setPlanDraft(null); }
+      return;
+    }
+    setConfirmDeletePlanId(id);
+    setTimeout(() => setConfirmDeletePlanId((current) => current === id ? null : current), 4000);
+  };
+  const weekdayButtons = [[1,"一"],[2,"二"],[3,"三"],[4,"四"],[5,"五"],[6,"六"],[0,"日"]];
 
   return (
     <div style={{ position: "absolute", inset: 0, background: "rgba(20,20,18,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 40 }}>
-      <div style={{ width: 320, maxHeight: 580, background: c.window, borderRadius: 16, padding: 16, display: "flex", flexDirection: "column", gap: 10, boxShadow: "0 20px 50px rgba(0,0,0,0.35)", overflowY: "auto" }}>
+      <div style={{ width: 344, maxHeight: 620, background: c.window, borderRadius: 16, padding: 16, display: "flex", flexDirection: "column", gap: 10, boxShadow: "0 20px 50px rgba(0,0,0,0.35)", overflowY: "auto" }}>
         <div className="flex items-center justify-between">
           <span style={{ fontSize: 14.5, fontWeight: 650, color: c.text }}>批量添加计划</span>
           <button onClick={onClose} style={{ color: c.subtext }}><X size={16} /></button>
@@ -471,32 +616,49 @@ function BatchAddModal({ c, onClose, onSubmit, initialDate, today }) {
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder={"每行一个任务，可选加时间前缀\n例如：\n09:00 晨会\n阅读30分钟"}
-          style={{
-            width: "100%", height: 84, resize: "none", fontSize: 13, padding: 9,
-            borderRadius: 10, background: c.inputBg, color: c.text, outline: "none",
-            border: "none", fontFamily: "inherit", lineHeight: 1.5, boxSizing: "border-box",
-          }}
+          style={{ width: "100%", height: 82, resize: "none", fontSize: 13, padding: 9, borderRadius: 10, background: c.inputBg, color: c.text, outline: "none", border: "none", fontFamily: "inherit", lineHeight: 1.5, boxSizing: "border-box" }}
         />
 
-        <div className="flex items-center justify-between">
-          <span style={{ fontSize: 11.5, color: c.subtext }}>标记为重复任务</span>
-          <select value={repeat} onChange={(e) => setRepeat(e.target.value)} style={{ fontSize: 11, padding: "4px 8px", borderRadius: 8, background: c.inputBg, color: c.text, border: "none", outline: "none" }}>
+        <div className="flex items-center justify-between" style={{ gap: 8 }}>
+          <span style={{ fontSize: 11.5, color: c.subtext }}>重复方式</span>
+          <select value={repeat} onChange={(e) => handleRepeatChange(e.target.value)} style={{ fontSize: 11, padding: "4px 8px", borderRadius: 8, background: c.inputBg, color: c.text, border: "none", outline: "none" }}>
             <option value="none">不重复</option>
             <option value="daily">每天</option>
-            <option value="weekly">每周</option>
+            <option value="weekly">每周指定星期</option>
             <option value="weekdays">工作日</option>
           </select>
         </div>
-
-        <div>
-          <div style={{ fontSize: 11.5, color: c.subtext, marginBottom: 6 }}>应用到哪些天</div>
-          <div className="flex items-center" style={{ gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
-            {[["today", "今天"], ["tomorrow", "明天"], ["week", "未来7天"], ["clear", "清空"]].map(([k, label]) => (
-              <button key={k} onClick={() => quickSelect(k)} style={{ fontSize: 11, padding: "4px 10px", borderRadius: 999, background: c.hover, color: c.subtext }}>
-                {label}
-              </button>
+        {repeat === "weekly" && (
+          <div className="flex items-center" style={{ gap: 5, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 10.5, color: c.subtext, marginRight: 2 }}>星期</span>
+            {weekdayButtons.map(([day, label]) => (
+              <button key={day} onClick={() => toggleWeeklyDay(day)} style={{ width: 27, height: 27, borderRadius: 999, fontSize: 10.5, background: weeklyDays.includes(day) ? c.accent : c.hover, color: weeklyDays.includes(day) ? c.accentText : c.subtext }}>{label}</button>
             ))}
           </div>
+        )}
+
+        <div>
+          <div className="flex items-center justify-between" style={{ marginBottom: 6 }}>
+            <span style={{ fontSize: 11.5, color: c.subtext }}>应用到哪些天</span>
+            <button onClick={() => { setSelected(new Set()); setRangeError(""); }} style={{ fontSize: 10.5, color: c.subtext }}>清除选择</button>
+          </div>
+          <div className="flex items-center" style={{ gap: 5, marginBottom: 8, flexWrap: "wrap" }}>
+            {[["today", "今天"], ["tomorrow", "明天"], ["week", "未来7天"], ["month", "未来30天"], ["custom", "自定义范围"]].map(([k, label]) => (
+              <button key={k} onClick={() => quickSelect(k)} style={{ fontSize: 10.5, padding: "4px 8px", borderRadius: 999, background: k === "custom" && rangeOpen ? c.accent : c.hover, color: k === "custom" && rangeOpen ? c.accentText : c.subtext }}>{label}</button>
+            ))}
+          </div>
+          {rangeOpen && (
+            <div style={{ padding: 8, borderRadius: 9, background: c.hover, marginBottom: 8 }}>
+              <div className="flex items-center" style={{ gap: 5 }}>
+                <input type="date" value={rangeStart} onChange={(e) => setRangeStart(e.target.value)} style={{ flex: 1, minWidth: 0, fontSize: 10.5, padding: "5px 5px", borderRadius: 7, background: c.window, color: c.text, border: "none", outline: "none" }} />
+                <span style={{ fontSize: 10, color: c.subtext }}>至</span>
+                <input type="date" value={rangeEnd} onChange={(e) => setRangeEnd(e.target.value)} style={{ flex: 1, minWidth: 0, fontSize: 10.5, padding: "5px 5px", borderRadius: 7, background: c.window, color: c.text, border: "none", outline: "none" }} />
+                <button onClick={() => selectRange(dateFromIso(rangeStart), dateFromIso(rangeEnd))} style={{ fontSize: 10.5, padding: "5px 7px", borderRadius: 7, background: c.accent, color: c.accentText, flexShrink: 0 }}>应用</button>
+              </div>
+              <div style={{ fontSize: 9.5, color: c.subtext, marginTop: 5 }}>按上面的重复方式自动筛选日期，不需要逐天点击。</div>
+            </div>
+          )}
+          {rangeError && <div style={{ fontSize: 10, color: c.overdueText, marginBottom: 6 }}>{rangeError}</div>}
           <div className="flex items-center justify-between" style={{ marginBottom: 4 }}>
             <IconButton c={c} onClick={() => setMonthDate((d) => new Date(d.getFullYear(), d.getMonth() - 1, 1))} title="上个月"><ChevronLeft size={14} /></IconButton>
             <span style={{ fontSize: 12, color: c.text, fontWeight: 600 }}>{monthDate.getFullYear()}年{monthDate.getMonth() + 1}月</span>
@@ -505,32 +667,61 @@ function BatchAddModal({ c, onClose, onSubmit, initialDate, today }) {
           <div className="grid grid-cols-7" style={{ gap: 3 }}>
             {cells.map((d, i) => {
               if (!d) return <div key={i} />;
-              const k = dateKey(d);
-              const isSel = selected.has(k);
-              const isToday = k === dateKey(today);
-              return (
-                <button
-                  key={i}
-                  onClick={() => toggleDate(d)}
-                  style={{
-                    fontSize: 11, padding: "5px 0", borderRadius: 8,
-                    background: isSel ? c.accent : isToday ? c.hover : "transparent",
-                    color: isSel ? c.accentText : c.text, fontWeight: isToday ? 700 : 400,
-                  }}
-                >
-                  {d.getDate()}
-                </button>
-              );
+              const k = dateKey(d); const isSel = selected.has(k); const isToday = k === dateKey(today);
+              return <button key={i} onClick={() => toggleDate(d)} style={{ fontSize: 11, padding: "5px 0", borderRadius: 8, background: isSel ? c.accent : isToday ? c.hover : "transparent", color: isSel ? c.accentText : c.text, fontWeight: isToday ? 700 : 400 }}>{d.getDate()}</button>;
             })}
           </div>
+          <div style={{ fontSize: 10, color: c.subtext, marginTop: 6 }}>已选择 {selected.size} 天</div>
         </div>
 
-        <button
-          onClick={handleSubmit}
-          style={{ marginTop: 4, padding: "10px 0", borderRadius: 10, background: c.accent, color: c.accentText, fontSize: 13, fontWeight: 650 }}
-        >
-          添加到 {selected.size} 天
-        </button>
+        <button onClick={handleSubmit} disabled={!text.trim() || selected.size === 0} style={{ marginTop: 2, padding: "9px 0", borderRadius: 10, background: c.accent, color: c.accentText, fontSize: 13, fontWeight: 650, opacity: text.trim() && selected.size ? 1 : .45 }}>添加到 {selected.size} 天</button>
+
+        <div style={{ borderTop: `1px solid ${c.divider}`, paddingTop: 9 }}>
+          <button onClick={() => setShowPlans((v) => !v)} className="flex items-center justify-between" style={{ width: "100%", color: c.text }}>
+            <span className="flex items-center" style={{ gap: 5, fontSize: 11.5, fontWeight: 650 }}><Repeat size={12} /> 已保存重复计划（{normalizedPlans.length}）</span>
+            {showPlans ? <ChevronUp size={13} color={c.subtext} /> : <ChevronDown size={13} color={c.subtext} />}
+          </button>
+          {showPlans && (
+            <div style={{ marginTop: 7, display: "flex", flexDirection: "column", gap: 6 }}>
+              {normalizedPlans.length === 0 && <div style={{ fontSize: 10.5, color: c.subtext, textAlign: "center", padding: "8px 0" }}>还没有重复计划</div>}
+              {normalizedPlans.map((plan) => (
+                <div key={plan.id} style={{ padding: "7px 8px", borderRadius: 9, background: editingPlanId === plan.id ? c.hover : "transparent", border: `1px solid ${c.divider}` }}>
+                  {editingPlanId === plan.id && planDraft ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      <input value={planDraft.text || ""} onChange={(e) => setPlanDraft({ ...planDraft, text: e.target.value })} style={{ width: "100%", boxSizing: "border-box", fontSize: 11.5, padding: "6px 7px", borderRadius: 7, background: c.inputBg, color: c.text, border: "none", outline: "none" }} />
+                      <div className="flex items-center" style={{ gap: 6 }}>
+                        <input type="time" value={planDraft.time || ""} onChange={(e) => setPlanDraft({ ...planDraft, time: e.target.value })} style={{ width: 105, fontSize: 10.5, padding: "5px 6px", borderRadius: 7, background: c.inputBg, color: c.text, border: "none", outline: "none" }} />
+                        <select value={planDraft.repeat || "daily"} onChange={(e) => setPlanDraft({ ...planDraft, repeat: e.target.value })} style={{ flex: 1, fontSize: 10.5, padding: "5px 6px", borderRadius: 7, background: c.inputBg, color: c.text, border: "none", outline: "none" }}>
+                          <option value="none">不再重复</option><option value="daily">每天</option><option value="weekly">每周指定星期</option><option value="weekdays">工作日</option>
+                        </select>
+                      </div>
+                      {planDraft.repeat === "weekly" && <div className="flex items-center" style={{ gap: 4 }}>{weekdayButtons.map(([day,label]) => <button key={day} onClick={() => toggleWeeklyDay(day, true)} style={{ width: 25, height: 25, borderRadius: 999, fontSize: 10, background: (planDraft.weekdays || []).includes(day) ? c.accent : c.inputBg, color: (planDraft.weekdays || []).includes(day) ? c.accentText : c.subtext }}>{label}</button>)}</div>}
+                      <div className="flex items-center" style={{ gap: 6 }}>
+                        <button onClick={savePlanEdit} style={{ flex: 1, padding: "6px 0", borderRadius: 7, background: c.accent, color: c.accentText, fontSize: 10.5 }}>保存</button>
+                        <button onClick={() => { setEditingPlanId(null); setPlanDraft(null); }} style={{ flex: 1, padding: "6px 0", borderRadius: 7, background: c.inputBg, color: c.subtext, fontSize: 10.5 }}>取消</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-start justify-between" style={{ gap: 6 }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: 11.5, color: c.text, fontWeight: 600, wordBreak: "break-word" }}>{plan.time ? `${plan.time} ` : ""}{plan.text}</div>
+                          <div style={{ fontSize: 9.5, color: c.subtext, marginTop: 2 }}>{repeatPlanLabel(plan)}{plan.startDate && plan.endDate ? ` · ${plan.startDate} 至 ${plan.endDate}` : ""}{plan.enabled === false ? " · 已暂停" : ""}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center" style={{ gap: 5, marginTop: 6 }}>
+                        <button onClick={() => beginPlanEdit(plan)} style={{ fontSize: 10, padding: "4px 7px", borderRadius: 7, background: c.hover, color: c.text }}>编辑</button>
+                        <button onClick={() => onTogglePlan(plan.id)} style={{ fontSize: 10, padding: "4px 7px", borderRadius: 7, background: c.hover, color: plan.enabled === false ? c.accent : c.subtext }}>{plan.enabled === false ? "恢复" : "暂停"}</button>
+                        <button onClick={() => requestDeletePlan(plan.id)} style={{ marginLeft: "auto", fontSize: 10, padding: "4px 7px", borderRadius: 7, background: confirmDeletePlanId === plan.id ? c.overdueBg : "transparent", color: c.overdueText }}>{confirmDeletePlanId === plan.id ? "确定删除？" : "删除"}</button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              ))}
+              <div style={{ fontSize: 9.5, color: c.subtext, lineHeight: 1.45 }}>暂停或删除这里只影响重复计划管理，不会删除已经生成、已经完成的历史任务和任务记录。</div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -959,6 +1150,7 @@ export default function TodayApp() {
   const [selectedDate, setSelectedDate] = useState(today);
   const [calendarMonth, setCalendarMonth] = useState(today);
   const [tasksByDate, setTasksByDate] = useState({ [dateKey(today)]: seedTasks });
+  const [repeatPlans, setRepeatPlans] = useState([]);
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState("");
   const [repeatOption, setRepeatOption] = useState("none");
@@ -1005,7 +1197,15 @@ export default function TodayApp() {
         if (data && !cancelled) {
           if (typeof data.idCounter === "number") idRef.current = Math.max(idRef.current, data.idCounter);
           const savedTasks = data.tasksByDate && typeof data.tasksByDate === "object" ? data.tasksByDate : null;
-          if (savedTasks) setTasksByDate(savedTasks);
+          let migratedTasks = savedTasks;
+          if (savedTasks) {
+            const migrated = migrateRepeatPlans(savedTasks, data.repeatPlans);
+            migratedTasks = migrated.tasksByDate;
+            setTasksByDate(migrated.tasksByDate);
+            setRepeatPlans(migrated.repeatPlans);
+          } else if (Array.isArray(data.repeatPlans)) {
+            setRepeatPlans(data.repeatPlans);
+          }
           let restoredSessions = normalizeSessions(data.sessions);
           const runtime = data.timerRuntime;
           if (runtime?.openSession?.taskId && Number(runtime.openSession.elapsedMs) > 0) {
@@ -1018,9 +1218,9 @@ export default function TodayApp() {
           setSessions(restoredSessions);
           if (Array.isArray(data.countdowns)) setCountdowns(data.countdowns);
           const restoredTimerStates = data.taskTimerStates && typeof data.taskTimerStates === "object" ? { ...data.taskTimerStates } : {};
-          if (runtime?.activeTaskId && savedTasks) {
+          if (runtime?.activeTaskId && migratedTasks) {
             let exists = false;
-            for (const list of Object.values(savedTasks)) if (Array.isArray(list) && list.some((t) => t.id === runtime.activeTaskId && !t.done)) { exists = true; break; }
+            for (const list of Object.values(migratedTasks)) if (Array.isArray(list) && list.some((t) => t.id === runtime.activeTaskId && !t.done)) { exists = true; break; }
             if (exists) {
               const rr = Math.max(0, Math.floor(Number(runtime.remaining) || 0));
               restoredTimerStates[runtime.activeTaskId] = rr;
@@ -1051,12 +1251,12 @@ export default function TodayApp() {
         activeTaskId, running, remaining: currentRemainingSeconds(), savedAt: Date.now(),
         openSession: openSession ? { ...openSession, elapsedMs: sessionElapsedMsRef.current } : null,
       } : null;
-      const payload = { tasksByDate, sessions, countdowns, taskTimerStates, taskListPrefs, soundSettings, timerRuntime, idCounter: idRef.current, theme, totalSeconds };
+      const payload = { tasksByDate, repeatPlans, sessions, countdowns, taskTimerStates, taskListPrefs, soundSettings, timerRuntime, idCounter: idRef.current, theme, totalSeconds };
       if (window.desktopAPI?.state) window.desktopAPI.state.set(payload).catch(() => {});
       else { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(payload)); } catch {} }
     }, 600);
     return () => clearTimeout(t);
-  }, [tasksByDate, sessions, countdowns, taskTimerStates, taskListPrefs, soundSettings, theme, totalSeconds, loaded, activeTaskId, running, openSession, runtimeCheckpoint]);
+  }, [tasksByDate, repeatPlans, sessions, countdowns, taskTimerStates, taskListPrefs, soundSettings, theme, totalSeconds, loaded, activeTaskId, running, openSession, runtimeCheckpoint]);
 
   useEffect(() => {
     if (!running) return undefined;
@@ -1218,12 +1418,20 @@ export default function TodayApp() {
       setTasks((list) => [...list, { id: nextId(), text, time, note: "", reminderTime: time, reminderEnabled: !!time, done: false, repeat: "none" }]);
     } else {
       const dates = repeatDates(selectedDate, repeat);
+      const repeatPlanId = makeRepeatPlanId();
+      const weekdays = repeat === "weekdays" ? [1, 2, 3, 4, 5] : repeat === "weekly" ? [selectedDate.getDay()] : [];
+      setRepeatPlans((plans) => [...plans, {
+        id: repeatPlanId, text, time, repeat, enabled: true,
+        startDate: dates.length ? toIsoDate(dates[0]) : toIsoDate(selectedDate),
+        endDate: dates.length ? toIsoDate(dates[dates.length - 1]) : toIsoDate(selectedDate),
+        weekdays,
+      }]);
       setTasksByDate((prev) => {
         const next = { ...prev };
         dates.forEach((d) => {
           const k2 = dateKey(d);
           const list = next[k2] ? [...next[k2]] : [];
-          list.push({ id: nextId(), text, time, note: "", reminderTime: time, reminderEnabled: !!time, done: false, repeat });
+          list.push({ id: nextId(), text, time, note: "", reminderTime: time, reminderEnabled: !!time, done: false, repeat, repeatPlanId });
           next[k2] = list;
         });
         return next;
@@ -1231,20 +1439,60 @@ export default function TodayApp() {
     }
   };
   const addFromTemplate = (tpl) => {
-    setTasks((list) => [...list, { id: nextId(), text: tpl.text, time: tpl.time, note: "", reminderTime: tpl.time || null, reminderEnabled: !!tpl.time, done: false, repeat: tpl.repeat }]);
+    setTasks((list) => [...list, { id: nextId(), text: tpl.text, time: tpl.time, note: "", reminderTime: tpl.time || null, reminderEnabled: !!tpl.time, done: false, repeat: tpl.repeat, repeatPlanId: tpl.id }]);
     setAdding(false);
   };
-  const addBatch = (dateKeys, parsedLines) => {
+  const addBatch = (dateKeys, parsedLines, newPlans = []) => {
+    if (newPlans.length) setRepeatPlans((plans) => [...plans, ...newPlans]);
     setTasksByDate((prev) => {
       const next = { ...prev };
       dateKeys.forEach((k2) => {
         const list = next[k2] ? [...next[k2]] : [];
-        parsedLines.forEach((p) => list.push({ id: nextId(), text: p.text, time: p.time, note: "", reminderTime: p.time, reminderEnabled: !!p.time, done: false, repeat: p.repeat || "none" }));
+        parsedLines.forEach((p) => list.push({ id: nextId(), text: p.text, time: p.time, note: "", reminderTime: p.time, reminderEnabled: !!p.time, done: false, repeat: p.repeat || "none", repeatPlanId: p.repeatPlanId || undefined }));
         next[k2] = list;
       });
       return next;
     });
     setShowBatchModal(false);
+  };
+  const updateRepeatPlan = (planId, patch) => {
+    const oldPlan = repeatPlans.find((plan) => String(plan.id) === String(planId));
+    if (!oldPlan) return;
+    if (patch.repeat === "none") { deleteRepeatPlan(planId); return; }
+    const nextPlan = { ...oldPlan, ...patch, id: oldPlan.id, enabled: oldPlan.enabled !== false, weekdays: Array.isArray(patch.weekdays) ? patch.weekdays : (oldPlan.weekdays || []) };
+    const affectedTaskIds = new Set();
+    Object.values(tasksByDate).forEach((list) => (list || []).forEach((task) => {
+      if (String(task.repeatPlanId) === String(planId) && !task.done) affectedTaskIds.add(task.id);
+    }));
+    setRepeatPlans((plans) => plans.map((plan) => String(plan.id) === String(planId) ? nextPlan : plan));
+    setTasksByDate((prev) => {
+      const next = {};
+      Object.entries(prev).forEach(([dk, list]) => {
+        next[dk] = (list || []).map((task) => {
+          if (String(task.repeatPlanId) !== String(planId) || task.done) return task;
+          const reminderTime = task.reminderTime === oldPlan.time || !task.reminderTime ? (nextPlan.time || null) : task.reminderTime;
+          return { ...task, text: nextPlan.text, time: nextPlan.time || null, repeat: nextPlan.repeat, reminderTime, reminderEnabled: task.reminderEnabled && !!(reminderTime || task.reminderTime) };
+        });
+      });
+      return next;
+    });
+    setSessions((list) => list.map((session) => affectedTaskIds.has(session.taskId) ? { ...session, taskText: nextPlan.text } : session));
+    if (openSession && affectedTaskIds.has(openSession.taskId)) setOpenSession((session) => ({ ...session, taskText: nextPlan.text }));
+  };
+  const toggleRepeatPlan = (planId) => setRepeatPlans((plans) => plans.map((plan) => String(plan.id) === String(planId) ? { ...plan, enabled: plan.enabled === false } : plan));
+  const deleteRepeatPlan = (planId) => {
+    setRepeatPlans((plans) => plans.filter((plan) => String(plan.id) !== String(planId)));
+    setTasksByDate((prev) => {
+      const next = {};
+      Object.entries(prev).forEach(([dk, list]) => {
+        next[dk] = (list || []).map((task) => {
+          if (String(task.repeatPlanId) !== String(planId)) return task;
+          const { repeatPlanId, ...rest } = task;
+          return { ...rest, repeat: "none" };
+        });
+      });
+      return next;
+    });
   };
   const clearSessions = (keepPredicate) => setSessions((s) => s.filter(keepPredicate));
   const clearTaskDates = (dateKeys) => {
@@ -1291,15 +1539,10 @@ export default function TodayApp() {
   }, [tasksByDate]);
 
 
-  /* 已标注为重复任务的模板，供快速添加时选用 */
-  const templateMap = new Map();
-  Object.values(tasksByDate).forEach((list) => list.forEach((t) => {
-    if (t.repeat && t.repeat !== "none") {
-      const tk = `${t.text}__${t.time || ""}__${t.repeat}`;
-      if (!templateMap.has(tk)) templateMap.set(tk, { text: t.text, time: t.time, repeat: t.repeat });
-    }
-  }));
-  const repeatTemplates = Array.from(templateMap.values());
+  /* 已保存重复计划：供快速添加与批量计划管理使用 */
+  const repeatTemplates = repeatPlans
+    .filter((plan) => plan && plan.enabled !== false && plan.repeat && plan.repeat !== "none")
+    .map((plan) => ({ ...plan }));
 
   /* 计时器主循环：用绝对截止时间计算，避免窗口隐藏/系统繁忙造成 setInterval 漂移 */
   useEffect(() => {
@@ -1759,7 +2002,7 @@ export default function TodayApp() {
         {showSoundSettings && <SoundSettingsModal c={c} settings={soundSettings} onChange={setSoundSettings} onClose={() => setShowSoundSettings(false)} onTest={playReminderSound} />}
         {showCustomTimer && <CustomTimerModal c={c} currentMinutes={Math.floor(totalSeconds / 60)} onClose={() => setShowCustomTimer(false)} onApply={(minutes) => { applyPreset(minutes); setShowCustomTimer(false); }} />}
         {showCountdownManager && <CountdownManagerModal c={c} countdowns={countdowns} onChange={setCountdowns} onClose={() => setShowCountdownManager(false)} />}
-        {showBatchModal && <BatchAddModal c={c} today={today} initialDate={selectedDate} onClose={() => setShowBatchModal(false)} onSubmit={addBatch} />}
+        {showBatchModal && <BatchAddModal c={c} today={today} initialDate={selectedDate} repeatPlans={repeatPlans} onClose={() => setShowBatchModal(false)} onSubmit={addBatch} onUpdatePlan={updateRepeatPlan} onDeletePlan={deleteRepeatPlan} onTogglePlan={toggleRepeatPlan} />}
         {showRecords && <RecordsModal c={c} sessions={sessions} onClose={() => setShowRecords(false)} onClear={clearSessions} />}
         {showReminderModal && (
           <ReminderModal

@@ -1,0 +1,12 @@
+v1.6.0 替换说明
+
+如果你是在自己当前项目上升级，只需要覆盖：
+- src/TodayApp.jsx
+- src/FloatWindow.jsx
+- package.json
+- package-lock.json
+
+本版没有新增 npm 依赖，一般不需要重新 npm install。
+
+免安装版：npm run build:portable
+安装版+免安装版：npm run build:windows

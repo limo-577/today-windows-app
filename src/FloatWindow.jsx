@@ -33,11 +33,13 @@ export default function FloatWindow() {
 
   return (
     <div style={{ width: '100vw', height: '100vh', background: c.window, color: c.text, display: 'flex', flexDirection: 'column', overflow: 'hidden', fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif", border: `1px solid ${c.divider}` }}>
-      <div className="native-drag flex items-center justify-between" style={{ height: 30, padding: '4px 6px', borderBottom: `1px solid ${c.divider}`, flexShrink: 0 }}>
-        <button className="no-drag" onClick={togglePinned} title={pinned ? '取消置顶' : '置顶'} style={{ color: pinned ? c.accent : c.subtext, display: 'flex' }}><Pin size={12} /></button>
-        <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }} title="拖动悬浮窗"><GripHorizontal size={13} color={c.subtext} /></div>
-        <input className="no-drag" type="range" min="0.3" max="1" step="0.05" value={opacity} onChange={(e) => changeOpacity(e.target.value)} title="透明度" style={{ width: 56, accentColor: c.accent }} />
-        <button className="no-drag" onClick={() => window.desktopAPI?.float?.close?.()} style={{ color: c.subtext, display: 'flex' }} title="关闭悬浮窗"><X size={12} /></button>
+      <div className="native-drag flex items-center" style={{ height: 32, padding: '4px 8px', borderBottom: `1px solid ${c.divider}`, flexShrink: 0, gap: 6 }}>
+        <button className="no-drag" onClick={togglePinned} title={pinned ? '取消置顶' : '置顶'} style={{ color: pinned ? c.accent : c.subtext, display: 'flex', width: 22, height: 22, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Pin size={12} /></button>
+        <div style={{ flex: 1, minWidth: 24, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="拖动悬浮窗"><GripHorizontal size={13} color={c.subtext} /></div>
+        <div className="no-drag" style={{ display: 'flex', alignItems: 'center', flexShrink: 0, marginRight: 12 }}>
+          <input type="range" min="0.3" max="1" step="0.05" value={opacity} onChange={(e) => changeOpacity(e.target.value)} title="透明度" style={{ width: 50, accentColor: c.accent }} />
+        </div>
+        <button className="no-drag" onClick={() => window.desktopAPI?.float?.close?.()} style={{ color: c.subtext, display: 'flex', width: 26, height: 22, alignItems: 'center', justifyContent: 'center', borderRadius: 6, flexShrink: 0 }} title="关闭悬浮窗"><X size={13} /></button>
       </div>
 
       <div style={{ padding: '6px 8px 4px', textAlign: 'center', flexShrink: 0 }}>
