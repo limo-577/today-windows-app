@@ -1,52 +1,146 @@
-# Today Windows App v1.3.3
+# 今日 · Today Windows App
 
-# 今日 v1.3 - Windows 本地任务与专注工具
+一款简洁、轻量、以本地数据为核心的 Windows 桌面任务与专注工具。
 
-基于原始 Today.jsx 改造成 Electron Windows 桌面应用。
+## v1.6.0
 
-## 主要能力
-- 本地任务与日历
-- 批量添加、重复任务模板
-- 专注计时与 CSV 记录导出
-- 真正独立的悬浮窗口
-- Windows 原生到点通知
-- 22:00 未完成任务提醒
-- 系统托盘后台运行
-- 可选开机自动启动
-- 主窗口/悬浮窗位置与状态记忆
-- 本机 JSON 持久化与备份恢复
+### ✨ 本版本
 
-## 运行
-1. 安装 Node.js LTS。
-2. 双击 `run-dev.bat` 进行开发运行。
+v1.6.0 在原有任务管理、专注计时和悬浮窗口功能的基础上，对主界面、任务管理以及悬浮窗口进行了进一步调整和优化。
 
-## 打包
-双击 `build-windows.bat`。
-完成后在 `release` 文件夹获得：
-- NSIS 安装版
-- Portable 免安装版
+### 主要功能
 
-需要稳定使用 Windows 系统通知时，更推荐 NSIS 安装版。
+* 📋 本地任务管理
+* ⏱️ 专注计时
+* 🪟 桌面悬浮窗口
+* 🔔 任务提醒
+* ▶️ 支持暂停和继续专注任务
+* 💾 本地保存任务及应用设置
+* 🎨 支持浅色 / 深色界面
+* 🖥️ Windows 桌面应用
+* 🔒 不需要登录账号
+* 🌐 不依赖在线服务使用核心功能
 
-## 关闭行为
-点击主窗口右上角关闭按钮后，程序会隐藏到 Windows 系统托盘，以便继续后台提醒。
-真正退出：右键系统托盘中的“今日”图标 -> 退出。
+### 数据与隐私
 
-## 数据位置
-数据保存在 Electron 的 Windows userData 目录中：
-- `today-state.json`：任务和记录
-- `today-state.json.bak`：上一版数据备份
-- `desktop-prefs.json`：窗口位置、悬浮窗设置等
+本应用主要用于本地任务管理和个人专注。
 
-所有业务数据均保存在本机，应用运行逻辑不需要联网。
+应用数据及设置保存在本机 Electron 用户数据目录中。
 
-详细改动见 `优化说明-v1.3.txt`。
+本项目不要求用户注册账号，也不需要通过服务器保存个人任务数据。
 
+## Windows 版本
 
-## v1.3.3 Resumable task timers
-- One task runs at a time.
-- Starting another task automatically pauses the current task.
-- Paused tasks remember their remaining countdown.
-- Resume any paused task later from the same point.
-- Per-task cumulative focus time is shown in both the main and floating windows.
-- Each pause/switch is stored as a separate session record.
+v1.6.0 提供两种 Windows 版本：
+
+### 安装版
+
+适合正常安装到 Windows 系统中使用。
+
+```text
+Today-Setup-1.6.0-x64.exe
+```
+
+### Portable 便携版
+
+无需传统安装流程，可以直接运行。
+
+```text
+Today-Portable-1.6.0-x64.exe
+```
+
+## 系统要求
+
+* Windows 10 / Windows 11
+* x64
+
+## 技术栈
+
+* Electron
+* React
+* Vite
+* JavaScript
+* electron-builder
+
+## 项目结构
+
+```text
+today-windows-app/
+├─ build/
+├─ electron/
+│  ├─ main.cjs
+│  └─ preload.cjs
+├─ src/
+│  ├─ TodayApp.jsx
+│  ├─ FloatWindow.jsx
+│  ├─ main.jsx
+│  └─ styles.css
+├─ .github/
+│  └─ workflows/
+│     └─ release.yml
+├─ package.json
+├─ package-lock.json
+└─ README.md
+```
+
+## 安全相关
+
+Electron 主窗口使用：
+
+```text
+contextIsolation: true
+nodeIntegration: false
+sandbox: true
+```
+
+应用核心功能不需要远程服务器，也不需要用户提供账号密码。
+
+## 开发
+
+安装依赖：
+
+```powershell
+npm install
+```
+
+启动开发环境：
+
+```powershell
+npm run dev
+```
+
+## 构建
+
+构建 Windows 安装版：
+
+```powershell
+npm run build
+```
+
+构建 Windows Portable：
+
+```powershell
+npm run build:portable
+```
+
+也可以直接使用 electron-builder：
+
+```powershell
+npx electron-builder --win
+```
+
+或者：
+
+```powershell
+npx electron-builder --win portable
+```
+
+## 版本
+
+当前版本：
+
+**v1.6.0**
+
+---
+
+本项目为本地 Windows 桌面任务与专注工具。
