@@ -11,6 +11,18 @@ contextBridge.exposeInMainWorld('desktopAPI', {
     get: () => ipcRenderer.invoke('state:get'),
     set: (data) => ipcRenderer.invoke('state:set', data),
   },
+  security: {
+    status: () => ipcRenderer.invoke('security:status'),
+    setPassword: (currentPassword, newPassword) => ipcRenderer.invoke('security:set-password', currentPassword, newPassword),
+    removePassword: (currentPassword) => ipcRenderer.invoke('security:remove-password', currentPassword),
+    verify: (password) => ipcRenderer.invoke('security:verify', password),
+    lock: () => ipcRenderer.invoke('security:lock'),
+    onState: (callback) => subscribe('security:state', callback),
+  },
+  backup: {
+    export: () => ipcRenderer.invoke('backup:export'),
+    import: () => ipcRenderer.invoke('backup:import'),
+  },
   notify: (title, body, payload) => ipcRenderer.invoke('notification:show', title, body, payload),
   reminders: {
     update: (schedule) => ipcRenderer.invoke('reminders:update', schedule),

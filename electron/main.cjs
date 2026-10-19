@@ -1,6 +1,7 @@
-const { app, BrowserWindow, ipcMain, Notification, Tray, Menu, nativeImage, screen, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, Notification, Tray, Menu, nativeImage, screen, dialog, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 
 let mainWindow = null;
 let floatWindow = null;
@@ -14,6 +15,9 @@ const remindedKeys = new Set();
 let reminderTimer = null;
 let prefsWriteTimer = null;
 let pendingPrefsPatch = {};
+let appLocked = false;
+let floatWasVisibleBeforeLock = false;
+let restoringBackup = false;
 
 if (process.platform === 'win32') app.setAppUserModelId('com.local.todayapp');
 
@@ -88,6 +92,181 @@ function schedulePrefsWrite(patch) {
   }, 350);
 }
 
+function readSecurityPrefs() {
+  const security = readPrefs().security;
+  if (!security || typeof security !== 'object') return null;
+  if (!security.salt || !security.hash) return null;
+  return security;
+}
+
+function isSecurityEnabled() {
+  return Boolean(readSecurityPrefs());
+}
+
+function validatePassword(password) {
+  const value = typeof password === 'string' ? password : '';
+  if (value.length < 4) return { ok: false, error: '密码至少需要4个字符' };
+  if (value.length > 128) return { ok: false, error: '密码不能超过128个字符' };
+  return { ok: true, value };
+}
+
+function makePasswordRecord(password) {
+  const salt = crypto.randomBytes(16);
+  const hash = crypto.scryptSync(password, salt, 64);
+  return {
+    algorithm: 'scrypt-v1',
+    salt: salt.toString('base64'),
+    hash: hash.toString('base64'),
+  };
+}
+
+function verifyStoredPassword(password, security = readSecurityPrefs()) {
+  try {
+    if (!security?.salt || !security?.hash || typeof password !== 'string') return false;
+    const salt = Buffer.from(security.salt, 'base64');
+    const expected = Buffer.from(security.hash, 'base64');
+    const actual = crypto.scryptSync(password, salt, expected.length);
+    return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+  } catch {
+    return false;
+  }
+}
+
+function currentSecurityStatus() {
+  return { enabled: isSecurityEnabled(), locked: Boolean(appLocked) };
+}
+
+function sendSecurityState(reason = 'state-change') {
+  const payload = { ...currentSecurityStatus(), reason };
+  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send('security:state', payload);
+  }
+  return payload;
+}
+
+function lockApplication(reason = 'manual') {
+  if (!isSecurityEnabled()) {
+    appLocked = false;
+    return currentSecurityStatus();
+  }
+  appLocked = true;
+  if (floatWindow && !floatWindow.isDestroyed()) {
+    floatWasVisibleBeforeLock = floatWasVisibleBeforeLock || floatWindow.isVisible();
+    floatWindow.hide();
+  }
+  rebuildTrayMenu();
+  return sendSecurityState(reason);
+}
+
+function unlockApplication(password) {
+  if (!isSecurityEnabled()) {
+    appLocked = false;
+    sendSecurityState('password-disabled');
+    return { ok: true, ...currentSecurityStatus() };
+  }
+  if (!verifyStoredPassword(password)) return { ok: false, error: '密码不正确' };
+  appLocked = false;
+  rebuildTrayMenu();
+  sendSecurityState('unlocked');
+  if (floatWasVisibleBeforeLock) {
+    floatWasVisibleBeforeLock = false;
+    createFloatWindow();
+  }
+  return { ok: true, ...currentSecurityStatus() };
+}
+
+function backupDefaultName() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `今日备份-${y}${m}${day}-${hh}${mm}.todaybackup`;
+}
+
+function buildBackupPayload() {
+  const state = readState() || {};
+  const prefs = readPrefs() || {};
+  let customSound = null;
+  try {
+    const fileName = typeof prefs.customSoundFile === 'string' ? prefs.customSoundFile : '';
+    const filePath = fileName ? userFile(path.basename(fileName)) : null;
+    if (filePath && fs.existsSync(filePath)) {
+      const stat = fs.statSync(filePath);
+      if (stat.size <= 20 * 1024 * 1024) {
+        customSound = {
+          name: prefs.customSoundName || path.basename(filePath),
+          extension: path.extname(filePath).toLowerCase(),
+          dataBase64: fs.readFileSync(filePath).toString('base64'),
+        };
+      }
+    }
+  } catch {}
+  return {
+    format: 'today-app-backup',
+    schemaVersion: 1,
+    appVersion: app.getVersion(),
+    exportedAt: new Date().toISOString(),
+    state,
+    prefs,
+    systemSettings: { openAtLogin: app.getLoginItemSettings().openAtLogin },
+    customSound,
+  };
+}
+
+function validateBackupPayload(data) {
+  if (!data || typeof data !== 'object') return { ok: false, error: '备份文件内容无效' };
+  if (data.format !== 'today-app-backup') return { ok: false, error: '这不是“今日”的备份文件' };
+  if (!data.state || typeof data.state !== 'object') return { ok: false, error: '备份中缺少任务数据' };
+  if (data.prefs != null && typeof data.prefs !== 'object') return { ok: false, error: '备份中的设置数据无效' };
+  return { ok: true };
+}
+
+function restoreBackupPayload(data) {
+  const check = validateBackupPayload(data);
+  if (!check.ok) return check;
+
+  const importedPrefs = data.prefs && typeof data.prefs === 'object' ? { ...data.prefs } : {};
+
+  // 自定义铃声使用安全的固定文件名恢复，避免备份中的文件名影响本机路径。
+  if (data.customSound?.dataBase64) {
+    try {
+      const allowed = new Set(['.mp3', '.wav', '.m4a', '.ogg']);
+      const ext = allowed.has(String(data.customSound.extension || '').toLowerCase())
+        ? String(data.customSound.extension).toLowerCase()
+        : '.wav';
+      const buf = Buffer.from(String(data.customSound.dataBase64), 'base64');
+      if (buf.length > 20 * 1024 * 1024) return { ok: false, error: '备份中的自定义铃声超过20MB' };
+      const fileName = `custom-reminder-sound${ext}`;
+      fs.writeFileSync(userFile(fileName), buf);
+      importedPrefs.customSoundFile = fileName;
+      importedPrefs.customSoundName = data.customSound.name || fileName;
+    } catch {
+      return { ok: false, error: '恢复自定义铃声失败' };
+    }
+  } else {
+    delete importedPrefs.customSoundFile;
+    delete importedPrefs.customSoundName;
+  }
+
+  if (prefsWriteTimer) { clearTimeout(prefsWriteTimer); prefsWriteTimer = null; }
+  pendingPrefsPatch = {};
+  if (!atomicWriteJson(stateFile(), data.state)) return { ok: false, error: '写入任务数据失败' };
+  if (!atomicWriteJson(prefsFile(), importedPrefs)) return { ok: false, error: '写入软件设置失败' };
+  try {
+    if (typeof data.systemSettings?.openAtLogin === 'boolean') {
+      app.setLoginItemSettings({ openAtLogin: data.systemSettings.openAtLogin, path: process.execPath });
+    }
+  } catch {}
+
+  reminderSchedule = { tasksByDate: {}, countdowns: [], soundMode: 'default' };
+  remindedKeys.clear();
+  lastReminderCheck = Date.now() - 60_000;
+  appLocked = Boolean(importedPrefs.security?.salt && importedPrefs.security?.hash);
+  return { ok: true, passwordEnabled: appLocked };
+}
+
 function clampBounds(bounds, fallback) {
   if (!bounds || !Number.isFinite(bounds.width) || !Number.isFinite(bounds.height)) return fallback;
   const displays = screen.getAllDisplays();
@@ -149,6 +328,11 @@ function createMainWindow() {
   mainWindow.once('ready-to-show', () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     mainWindow.show();
+    sendSecurityState('ready');
+  });
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    sendSecurityState('renderer-ready');
   });
 
   mainWindow.on('close', (event) => {
@@ -178,6 +362,10 @@ function createMainWindow() {
 }
 
 function createFloatWindow() {
+  if (appLocked) {
+    showMainWindow();
+    return null;
+  }
   if (floatWindow && !floatWindow.isDestroyed()) {
     floatWindow.show();
     floatWindow.focus();
@@ -248,6 +436,7 @@ function rebuildTrayMenu() {
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '打开今日', click: showMainWindow },
     { label: '打开悬浮窗', click: () => createFloatWindow() },
+    ...(isSecurityEnabled() ? [{ label: appLocked ? '已锁定' : '立即锁定', enabled: !appLocked, click: () => { lockApplication('tray'); showMainWindow(); } }] : []),
     { type: 'separator' },
     {
       label: '开机自动启动',
@@ -287,7 +476,9 @@ function dueTimestamp(dateKey, hm) {
 
 function showNativeNotification(title, body, payload, options = {}) {
   if (!Notification.isSupported()) return false;
-  const notification = new Notification({ title: String(title || '今日'), body: String(body || ''), silent: Boolean(options.silent) });
+  const safeTitle = appLocked ? '今日提醒' : String(title || '今日');
+  const safeBody = appLocked ? '软件已锁定，解锁后查看提醒内容。' : String(body || '');
+  const notification = new Notification({ title: safeTitle, body: safeBody, silent: Boolean(options.silent) });
   notification.on('click', () => {
     showMainWindow();
     if (payload && mainWindow && !mainWindow.isDestroyed()) {
@@ -410,10 +601,16 @@ function startReminderLoop() {
 }
 
 app.whenReady().then(() => {
+  // 只要用户设置过密码，每次重新启动软件都从锁定状态开始。
+  appLocked = isSecurityEnabled();
   createMainWindow();
   createTray();
   startReminderLoop();
   checkReminders();
+
+  // Windows 锁屏或电脑进入睡眠时，软件自动上锁；系统解锁后仍需输入软件密码。
+  powerMonitor.on('lock-screen', () => lockApplication('system-lock'));
+  powerMonitor.on('suspend', () => lockApplication('system-suspend'));
 
   app.on('activate', showMainWindow);
 });
@@ -430,7 +627,87 @@ app.on('window-all-closed', () => {
 });
 
 ipcMain.handle('state:get', () => readState());
-ipcMain.handle('state:set', (_event, data) => writeState(data));
+ipcMain.handle('state:set', (_event, data) => restoringBackup ? false : writeState(data));
+
+ipcMain.handle('security:status', () => currentSecurityStatus());
+ipcMain.handle('security:set-password', (_event, currentPassword, newPassword) => {
+  const validation = validatePassword(newPassword);
+  if (!validation.ok) return validation;
+  const existing = readSecurityPrefs();
+  if (existing && !verifyStoredPassword(currentPassword, existing)) return { ok: false, error: '当前密码不正确' };
+  const security = makePasswordRecord(validation.value);
+  if (!writePrefs({ security })) return { ok: false, error: '保存密码失败' };
+  appLocked = false;
+  rebuildTrayMenu();
+  sendSecurityState(existing ? 'password-changed' : 'password-created');
+  return { ok: true, ...currentSecurityStatus() };
+});
+ipcMain.handle('security:remove-password', (_event, currentPassword) => {
+  const existing = readSecurityPrefs();
+  if (!existing) return { ok: true, enabled: false, locked: false };
+  if (!verifyStoredPassword(currentPassword, existing)) return { ok: false, error: '当前密码不正确' };
+  if (!writePrefs({ security: null })) return { ok: false, error: '移除密码失败' };
+  appLocked = false;
+  floatWasVisibleBeforeLock = false;
+  rebuildTrayMenu();
+  sendSecurityState('password-removed');
+  return { ok: true, enabled: false, locked: false };
+});
+ipcMain.handle('security:verify', (_event, password) => unlockApplication(password));
+ipcMain.handle('security:lock', () => {
+  const status = lockApplication('manual');
+  showMainWindow();
+  return { ok: status.locked, ...status, error: status.enabled ? undefined : '请先设置密码' };
+});
+
+ipcMain.handle('backup:export', async () => {
+  try {
+    const result = await dialog.showSaveDialog(mainWindow || undefined, {
+      title: '导出“今日”备份',
+      defaultPath: backupDefaultName(),
+      filters: [{ name: '今日备份文件', extensions: ['todaybackup'] }],
+    });
+    if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+    const payload = buildBackupPayload();
+    fs.writeFileSync(result.filePath, JSON.stringify(payload, null, 2), 'utf8');
+    return { ok: true, filePath: result.filePath, fileName: path.basename(result.filePath) };
+  } catch (error) {
+    return { ok: false, error: error?.message || '导出备份失败' };
+  }
+});
+
+ipcMain.handle('backup:import', async () => {
+  try {
+    const result = await dialog.showOpenDialog(mainWindow || undefined, {
+      title: '导入“今日”备份',
+      properties: ['openFile'],
+      filters: [
+        { name: '今日备份文件', extensions: ['todaybackup'] },
+        { name: 'JSON 文件', extensions: ['json'] },
+      ],
+    });
+    if (result.canceled || !result.filePaths?.[0]) return { ok: false, canceled: true };
+    const filePath = result.filePaths[0];
+    const stat = fs.statSync(filePath);
+    if (stat.size > 60 * 1024 * 1024) return { ok: false, error: '备份文件过大，无法导入' };
+    const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    restoringBackup = true;
+    const restored = restoreBackupPayload(data);
+    if (!restored.ok) { restoringBackup = false; return restored; }
+
+    // 重新启动后，React 会从新恢复的状态文件中完整载入任务、记录、倒计时和设置。
+    setTimeout(() => {
+      try {
+        isQuitting = true;
+        app.relaunch();
+        app.exit(0);
+      } catch { restoringBackup = false; }
+    }, 900);
+    return { ok: true, restart: true, fileName: path.basename(filePath), passwordEnabled: restored.passwordEnabled };
+  } catch (error) {
+    return { ok: false, error: error?.message || '导入备份失败' };
+  }
+});
 ipcMain.handle('notification:show', (_event, title, body, payload) => showNativeNotification(title, body, payload));
 ipcMain.handle('reminders:update', (_event, schedule) => {
   if (schedule && typeof schedule === 'object' && ('tasksByDate' in schedule || 'countdowns' in schedule)) {
@@ -533,13 +810,14 @@ ipcMain.handle('window:set-opacity', (event, value) => {
 
 ipcMain.handle('float:open', (_event, snapshot) => {
   lastFloatSnapshot = snapshot || lastFloatSnapshot;
+  if (appLocked) { showMainWindow(); return false; }
   createFloatWindow();
   return true;
 });
 
 ipcMain.handle('float:update', (_event, snapshot) => {
   lastFloatSnapshot = snapshot;
-  if (floatWindow && !floatWindow.isDestroyed() && !floatWindow.webContents.isDestroyed()) {
+  if (!appLocked && floatWindow && !floatWindow.isDestroyed() && !floatWindow.webContents.isDestroyed()) {
     floatWindow.webContents.send('float:snapshot', snapshot);
   }
   return true;
@@ -551,6 +829,7 @@ ipcMain.handle('float:close', () => {
 });
 
 ipcMain.on('float:action', (_event, action) => {
+  if (appLocked) return;
   if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
     mainWindow.webContents.send('float:action', action);
   }
