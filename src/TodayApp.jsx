@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   Plus, Check, ChevronLeft, ChevronRight, Sun, Moon,
   Play, Pause, RotateCcw, PictureInPicture2, X,
-  CalendarDays, List, ListPlus, ClipboardList, Repeat, AlarmClock, Pencil, Bell, BellOff, Volume2, ArrowRight, ChevronDown, ChevronUp, FileText, Lock, Download, Upload,
+  CalendarDays, List, ListPlus, ClipboardList, Repeat, AlarmClock, Pencil, Bell, BellOff, Volume2, ArrowRight, ChevronDown, ChevronUp, FileText,
 } from "lucide-react";
 
 /* ---------- 日期工具 ---------- */
@@ -49,36 +49,60 @@ const repeatDates = (baseDate, type) => {
   return dates;
 };
 const REPEAT_LABELS = { daily: "每天重复", weekly: "每周重复", weekdays: "工作日重复" };
-const makeRepeatPlanId = () => `rp-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-const dateKeysInRange = (startKey, endKey, limit = 1000) => {
-  if (!startKey || !endKey) return [];
-  let start = dateFromKey(startKey), end = dateFromKey(endKey);
-  if (start > end) [start, end] = [end, start];
-  const out = [];
-  let d = new Date(start), guard = 0;
-  while (d <= end && guard < limit) { out.push(dateKey(d)); d = addDays(d, 1); guard += 1; }
-  return out;
-};
-const repeatPlanDateKeys = (plan) => {
-  if (!plan?.startKey || !plan?.endKey) return [];
-  const all = dateKeysInRange(plan.startKey, plan.endKey);
-  if (plan?.repeat === "weekdays") return all.filter((k) => { const day = dateFromKey(k).getDay(); return day !== 0 && day !== 6; });
-  if (plan?.repeat === "weekly") {
-    const weekdays = Array.isArray(plan.weekdays) && plan.weekdays.length ? plan.weekdays : [dateFromKey(plan.startKey).getDay()];
-    return all.filter((k) => weekdays.includes(dateFromKey(k).getDay()));
-  }
-  return all;
-};
+const WEEKDAY_SHORT = ["日", "一", "二", "三", "四", "五", "六"];
+const makeRepeatPlanId = (prefix = "rp") => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const repeatPlanLabel = (plan) => {
-  if (!plan) return "";
+  if (!plan || plan.repeat === "none") return "不重复";
   if (plan.repeat === "daily") return "每天";
   if (plan.repeat === "weekdays") return "工作日";
   if (plan.repeat === "weekly") {
-    const labels = ["日", "一", "二", "三", "四", "五", "六"];
-    const days = Array.isArray(plan.weekdays) ? [...plan.weekdays].sort((a,b) => a-b) : [];
-    return days.length ? `每周${days.map((d) => labels[d]).join("/")}` : "每周";
+    const days = Array.isArray(plan.weekdays) && plan.weekdays.length ? plan.weekdays : [];
+    return days.length ? `每周${days.map((d) => WEEKDAY_SHORT[d]).join("/")}` : "每周";
   }
-  return "不重复";
+  return REPEAT_LABELS[plan.repeat] || "重复";
+};
+const migrateRepeatPlans = (rawTasks, rawPlans) => {
+  const tasksByDate = {};
+  Object.entries(rawTasks && typeof rawTasks === "object" ? rawTasks : {}).forEach(([dk, list]) => {
+    tasksByDate[dk] = (Array.isArray(list) ? list : []).map((task) => ({ ...task }));
+  });
+  const repeatPlans = (Array.isArray(rawPlans) ? rawPlans : []).map((plan) => ({
+    ...plan,
+    enabled: plan.enabled !== false,
+    weekdays: Array.isArray(plan.weekdays) ? [...plan.weekdays] : [],
+  }));
+  const known = new Set(repeatPlans.map((plan) => String(plan.id)));
+  const groups = new Map();
+  Object.entries(tasksByDate).forEach(([dk, list]) => {
+    list.forEach((task, index) => {
+      if (!task?.repeat || task.repeat === "none") return;
+      if (task.repeatPlanId && known.has(String(task.repeatPlanId))) return;
+      const signature = `${task.text || ""}__${task.time || ""}__${task.repeat}`;
+      if (!groups.has(signature)) groups.set(signature, []);
+      groups.get(signature).push({ dk, index, task });
+    });
+  });
+  groups.forEach((rows) => {
+    if (!rows.length) return;
+    const first = rows[0].task;
+    const id = makeRepeatPlanId("legacy");
+    const dates = rows.map((row) => dateFromKey(row.dk)).sort((a, b) => a - b);
+    const weekdaySet = new Set(dates.map((d) => d.getDay()));
+    const weekdays = first.repeat === "weekdays" ? [1, 2, 3, 4, 5] : first.repeat === "weekly" ? Array.from(weekdaySet).sort((a, b) => a - b) : [];
+    repeatPlans.push({
+      id,
+      text: first.text || "",
+      time: first.time || null,
+      repeat: first.repeat,
+      enabled: true,
+      startDate: dates.length ? toIsoDate(dates[0]) : "",
+      endDate: dates.length ? toIsoDate(dates[dates.length - 1]) : "",
+      weekdays,
+      legacy: true,
+    });
+    rows.forEach(({ dk, index }) => { tasksByDate[dk][index].repeatPlanId = id; });
+  });
+  return { tasksByDate, repeatPlans };
 };
 const formatFocusTime = (sec) => {
   const total = Math.max(0, Math.floor(sec || 0));
@@ -147,32 +171,6 @@ const mergeSessionRecord = (list, record) => {
   return next;
 };
 const normalizeSessions = (sessions) => (Array.isArray(sessions) ? sessions : []).reduce((acc, item) => mergeSessionRecord(acc, item), []);
-const migrateRepeatPlanData = (tasksByDate, savedPlans) => {
-  const source = tasksByDate && typeof tasksByDate === "object" ? tasksByDate : {};
-  const nextTasks = Object.fromEntries(Object.entries(source).map(([k, list]) => [k, Array.isArray(list) ? list.map((t) => ({ ...t })) : []]));
-  const plans = Array.isArray(savedPlans) ? savedPlans.map((p) => ({ ...p, weekdays: Array.isArray(p.weekdays) ? [...p.weekdays] : [] })) : [];
-  const groups = new Map();
-  Object.entries(nextTasks).forEach(([dk, list]) => list.forEach((task) => {
-    if (!task || task.repeatPlanId || !task.repeat || task.repeat === "none") return;
-    const gk = `${task.text || ""}__${task.time || ""}__${task.repeat}`;
-    if (!groups.has(gk)) groups.set(gk, []);
-    groups.get(gk).push({ dk, task });
-  }));
-  groups.forEach((rows) => {
-    if (!rows.length) return;
-    const first = rows[0].task;
-    const keys = rows.map((r) => r.dk).sort((a,b) => dateFromKey(a) - dateFromKey(b));
-    const id = makeRepeatPlanId();
-    rows.forEach(({ task }) => { task.repeatPlanId = id; });
-    const weekdaySet = new Set(keys.map((k) => dateFromKey(k).getDay()));
-    plans.push({
-      id, text: first.text || "", time: first.time || null, repeat: first.repeat,
-      weekdays: first.repeat === "weekly" ? Array.from(weekdaySet).sort((a,b) => a-b) : [],
-      startKey: keys[0], endKey: keys[keys.length - 1], enabled: true, createdAt: Date.now(), migrated: true,
-    });
-  });
-  return { tasksByDate: nextTasks, repeatPlans: plans };
-};
 
 /* ---------- 主题色板 ---------- */
 const THEMES = {
@@ -489,32 +487,23 @@ function CalendarView({ monthDate, setMonthDate, selectedDate, today, tasksByDat
 }
 
 /* ---------- 批量添加计划弹窗 ---------- */
-function BatchAddModal({ c, onClose, onSubmit, initialDate, today, repeatPlans = [], onUpdatePlan, onTogglePlan, onDeletePlan }) {
+function BatchAddModal({ c, onClose, onSubmit, initialDate, today, repeatPlans, onUpdatePlan, onDeletePlan, onTogglePlan }) {
   const [text, setText] = useState("");
   const [monthDate, setMonthDate] = useState(initialDate);
   const [selected, setSelected] = useState(new Set([dateKey(initialDate)]));
   const [repeat, setRepeat] = useState("none");
-  const [weekdays, setWeekdays] = useState(new Set([initialDate.getDay()]));
-  const [customRangeOpen, setCustomRangeOpen] = useState(false);
+  const [weeklyDays, setWeeklyDays] = useState([initialDate.getDay()]);
+  const [rangeOpen, setRangeOpen] = useState(false);
   const [rangeStart, setRangeStart] = useState(toIsoDate(initialDate));
-  const [rangeEnd, setRangeEnd] = useState(toIsoDate(initialDate));
-  const [manageOpen, setManageOpen] = useState(false);
-  const [editingPlan, setEditingPlan] = useState(null);
-  const [deletePlanId, setDeletePlanId] = useState(null);
+  const [rangeEnd, setRangeEnd] = useState(toIsoDate(addDays(initialDate, 29)));
   const [rangeError, setRangeError] = useState("");
+  const [showPlans, setShowPlans] = useState(false);
+  const [editingPlanId, setEditingPlanId] = useState(null);
+  const [planDraft, setPlanDraft] = useState(null);
+  const [confirmDeletePlanId, setConfirmDeletePlanId] = useState(null);
 
   const cells = buildMonthGrid(monthDate);
-  const setRangeSelection = (start, end) => {
-    const startD = startOfDay(start), endD = startOfDay(end);
-    if (startD > endD) { setRangeError("结束日期不能早于开始日期"); return; }
-    const diff = Math.round((endD - startD) / 86400000) + 1;
-    if (diff > 1000) { setRangeError("一次最多安排1000天"); return; }
-    setRangeError("");
-    const keys = Array.from({ length: diff }, (_, i) => dateKey(addDays(startD, i)));
-    setSelected(new Set(keys));
-    setRangeStart(toIsoDate(startD)); setRangeEnd(toIsoDate(endD));
-    setMonthDate(new Date(startD.getFullYear(), startD.getMonth(), 1));
-  };
+  const normalizedPlans = Array.isArray(repeatPlans) ? repeatPlans : [];
   const toggleDate = (d) => {
     const k = dateKey(d);
     setSelected((prev) => {
@@ -523,67 +512,101 @@ function BatchAddModal({ c, onClose, onSubmit, initialDate, today, repeatPlans =
       return next;
     });
   };
+  const dateFitsRepeat = (d, repeatType = repeat, days = weeklyDays) => {
+    if (repeatType === "weekdays") return d.getDay() !== 0 && d.getDay() !== 6;
+    if (repeatType === "weekly") return days.includes(d.getDay());
+    return true;
+  };
+  const selectRange = (from, to, repeatType = repeat, days = weeklyDays) => {
+    const start = startOfDay(from), finish = startOfDay(to);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(finish.getTime()) || finish < start) {
+      setRangeError("结束日期不能早于开始日期");
+      return;
+    }
+    const span = Math.floor((finish - start) / 86400000) + 1;
+    if (span > 1095) {
+      setRangeError("一次最多选择3年范围，请缩短日期范围");
+      return;
+    }
+    const next = new Set();
+    for (let i = 0; i < span; i += 1) {
+      const d = addDays(start, i);
+      if (dateFitsRepeat(d, repeatType, days)) next.add(dateKey(d));
+    }
+    setSelected(next);
+    setMonthDate(new Date(start.getFullYear(), start.getMonth(), 1));
+    setRangeError(next.size ? "" : "当前重复条件下没有可用日期");
+  };
   const quickSelect = (mode) => {
-    setCustomRangeOpen(false); setRangeError("");
-    if (mode === "today") setRangeSelection(today, today);
-    if (mode === "tomorrow") { const d = addDays(today, 1); setRangeSelection(d, d); }
-    if (mode === "week") setRangeSelection(today, addDays(today, 6));
-    if (mode === "month") setRangeSelection(today, addDays(today, 29));
-    if (mode === "custom") { setCustomRangeOpen(true); }
+    setRangeError("");
+    if (mode === "today") { setSelected(new Set([dateKey(today)])); setMonthDate(new Date(today.getFullYear(), today.getMonth(), 1)); return; }
+    if (mode === "tomorrow") { const d = addDays(today, 1); setSelected(new Set([dateKey(d)])); setMonthDate(new Date(d.getFullYear(), d.getMonth(), 1)); return; }
+    if (mode === "week") { selectRange(today, addDays(today, 6)); return; }
+    if (mode === "month") { selectRange(today, addDays(today, 29)); return; }
+    if (mode === "custom") { setRangeOpen((v) => !v); }
   };
-  const applyCustomRange = () => {
-    if (!rangeStart || !rangeEnd) { setRangeError("请选择开始和结束日期"); return; }
-    setRangeSelection(dateFromIso(rangeStart), dateFromIso(rangeEnd));
+  const toggleWeeklyDay = (day, editing = false) => {
+    if (editing) {
+      setPlanDraft((prev) => {
+        const current = Array.isArray(prev?.weekdays) ? prev.weekdays : [];
+        const weekdays = current.includes(day) ? current.filter((x) => x !== day) : [...current, day].sort((a, b) => a - b);
+        return { ...prev, weekdays };
+      });
+      return;
+    }
+    setWeeklyDays((prev) => prev.includes(day) ? prev.filter((x) => x !== day) : [...prev, day].sort((a, b) => a - b));
   };
-  const toggleWeekday = (day) => setWeekdays((prev) => {
-    const next = new Set(prev);
-    next.has(day) ? next.delete(day) : next.add(day);
-    return next;
-  });
-
-  const selectedSorted = Array.from(selected).sort((a,b) => dateFromKey(a) - dateFromKey(b));
-  const effectiveKeys = (() => {
-    if (!selectedSorted.length) return [];
-    if (repeat === "none") return selectedSorted;
-    const all = dateKeysInRange(selectedSorted[0], selectedSorted[selectedSorted.length - 1]);
-    if (repeat === "weekdays") return all.filter((k) => { const d = dateFromKey(k).getDay(); return d !== 0 && d !== 6; });
-    if (repeat === "weekly") return all.filter((k) => weekdays.has(dateFromKey(k).getDay()));
-    return all;
-  })();
-
+  const handleRepeatChange = (value) => {
+    setRepeat(value);
+    if (value === "weekly" && weeklyDays.length === 0) setWeeklyDays([initialDate.getDay()]);
+  };
   const handleSubmit = () => {
     const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
-    if (lines.length === 0 || effectiveKeys.length === 0) return;
-    const startKey = selectedSorted[0];
-    const endKey = selectedSorted[selectedSorted.length - 1];
-    onSubmit(effectiveKeys, lines.map((l) => parseTaskLine(l)), {
-      repeat,
-      weekdays: repeat === "weekly" ? Array.from(weekdays).sort((a,b) => a-b) : [],
-      startKey, endKey,
+    if (lines.length === 0 || selected.size === 0) return;
+    if (repeat === "weekly" && weeklyDays.length === 0) { setRangeError("每周重复至少选择一个星期"); return; }
+    const sortedKeys = Array.from(selected).sort((a, b) => dateFromKey(a) - dateFromKey(b));
+    const startDate = sortedKeys.length ? toIsoDate(dateFromKey(sortedKeys[0])) : "";
+    const endDate = sortedKeys.length ? toIsoDate(dateFromKey(sortedKeys[sortedKeys.length - 1])) : "";
+    const plans = [];
+    const parsedLines = lines.map((line) => {
+      const parsed = parseTaskLine(line);
+      if (repeat === "none") return { ...parsed, repeat: "none" };
+      const repeatPlanId = makeRepeatPlanId();
+      const planWeekdays = repeat === "weekdays" ? [1, 2, 3, 4, 5] : repeat === "weekly" ? [...weeklyDays] : [];
+      plans.push({ id: repeatPlanId, text: parsed.text, time: parsed.time, repeat, enabled: true, startDate, endDate, weekdays: planWeekdays });
+      return { ...parsed, repeat, repeatPlanId };
     });
+    onSubmit(sortedKeys, parsedLines, plans);
   };
-
-  const beginEditPlan = (plan) => {
-    setDeletePlanId(null);
-    setEditingPlan({ ...plan, weekdays: Array.isArray(plan.weekdays) ? [...plan.weekdays] : [] });
+  const beginPlanEdit = (plan) => {
+    setEditingPlanId(plan.id);
+    setPlanDraft({ ...plan, time: plan.time || "", weekdays: Array.isArray(plan.weekdays) ? [...plan.weekdays] : [] });
+    setConfirmDeletePlanId(null);
   };
-  const editToggleWeekday = (day) => setEditingPlan((prev) => prev ? ({ ...prev, weekdays: prev.weekdays.includes(day) ? prev.weekdays.filter((d) => d !== day) : [...prev.weekdays, day].sort((a,b) => a-b) }) : prev);
-  const saveEditedPlan = () => {
-    if (!editingPlan) return;
-    const textValue = String(editingPlan.text || "").trim();
-    if (!textValue || !editingPlan.startKey || !editingPlan.endKey) return;
-    if (dateFromKey(editingPlan.startKey) > dateFromKey(editingPlan.endKey)) { setRangeError("重复计划的结束日期不能早于开始日期"); return; }
-    const planDays = Math.round((startOfDay(dateFromKey(editingPlan.endKey)) - startOfDay(dateFromKey(editingPlan.startKey))) / 86400000) + 1;
-    if (planDays > 1000) { setRangeError("一个重复计划最多安排1000天"); return; }
-    if (editingPlan.repeat === "weekly" && (!editingPlan.weekdays || editingPlan.weekdays.length === 0)) { setRangeError("每周重复至少选择一个星期"); return; }
-    onUpdatePlan?.(editingPlan.id, { ...editingPlan, text: textValue, time: editingPlan.time || null });
-    setEditingPlan(null); setRangeError("");
+  const savePlanEdit = () => {
+    if (!planDraft || !editingPlanId) return;
+    const textValue = String(planDraft.text || "").trim();
+    if (!textValue) return;
+    if (planDraft.repeat === "weekly" && (!Array.isArray(planDraft.weekdays) || planDraft.weekdays.length === 0)) return;
+    onUpdatePlan(editingPlanId, { ...planDraft, text: textValue, time: planDraft.time || null });
+    setEditingPlanId(null);
+    setPlanDraft(null);
   };
-  const weekLabels = [[1,"一"],[2,"二"],[3,"三"],[4,"四"],[5,"五"],[6,"六"],[0,"日"]];
+  const requestDeletePlan = (id) => {
+    if (confirmDeletePlanId === id) {
+      onDeletePlan(id);
+      setConfirmDeletePlanId(null);
+      if (editingPlanId === id) { setEditingPlanId(null); setPlanDraft(null); }
+      return;
+    }
+    setConfirmDeletePlanId(id);
+    setTimeout(() => setConfirmDeletePlanId((current) => current === id ? null : current), 4000);
+  };
+  const weekdayButtons = [[1,"一"],[2,"二"],[3,"三"],[4,"四"],[5,"五"],[6,"六"],[0,"日"]];
 
   return (
     <div style={{ position: "absolute", inset: 0, background: "rgba(20,20,18,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 40 }}>
-      <div style={{ width: 350, maxHeight: 620, background: c.window, borderRadius: 16, padding: 16, display: "flex", flexDirection: "column", gap: 10, boxShadow: "0 20px 50px rgba(0,0,0,0.35)", overflowY: "auto" }}>
+      <div style={{ width: 344, maxHeight: 620, background: c.window, borderRadius: 16, padding: 16, display: "flex", flexDirection: "column", gap: 10, boxShadow: "0 20px 50px rgba(0,0,0,0.35)", overflowY: "auto" }}>
         <div className="flex items-center justify-between">
           <span style={{ fontSize: 14.5, fontWeight: 650, color: c.text }}>批量添加计划</span>
           <button onClick={onClose} style={{ color: c.subtext }}><X size={16} /></button>
@@ -593,13 +616,13 @@ function BatchAddModal({ c, onClose, onSubmit, initialDate, today, repeatPlans =
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder={"每行一个任务，可选加时间前缀\n例如：\n09:00 晨会\n阅读30分钟"}
-          style={{ width: "100%", height: 84, resize: "none", fontSize: 13, padding: 9, borderRadius: 10, background: c.inputBg, color: c.text, outline: "none", border: "none", fontFamily: "inherit", lineHeight: 1.5, boxSizing: "border-box" }}
+          style={{ width: "100%", height: 82, resize: "none", fontSize: 13, padding: 9, borderRadius: 10, background: c.inputBg, color: c.text, outline: "none", border: "none", fontFamily: "inherit", lineHeight: 1.5, boxSizing: "border-box" }}
         />
 
-        <div className="flex items-center justify-between">
-          <span style={{ fontSize: 11.5, color: c.subtext }}>安排方式</span>
-          <select value={repeat} onChange={(e) => setRepeat(e.target.value)} style={{ fontSize: 11, padding: "4px 8px", borderRadius: 8, background: c.inputBg, color: c.text, border: "none", outline: "none" }}>
-            <option value="none">按所选日期 / 不重复</option>
+        <div className="flex items-center justify-between" style={{ gap: 8 }}>
+          <span style={{ fontSize: 11.5, color: c.subtext }}>重复方式</span>
+          <select value={repeat} onChange={(e) => handleRepeatChange(e.target.value)} style={{ fontSize: 11, padding: "4px 8px", borderRadius: 8, background: c.inputBg, color: c.text, border: "none", outline: "none" }}>
+            <option value="none">不重复</option>
             <option value="daily">每天</option>
             <option value="weekly">每周指定星期</option>
             <option value="weekdays">工作日</option>
@@ -608,25 +631,34 @@ function BatchAddModal({ c, onClose, onSubmit, initialDate, today, repeatPlans =
         {repeat === "weekly" && (
           <div className="flex items-center" style={{ gap: 5, flexWrap: "wrap" }}>
             <span style={{ fontSize: 10.5, color: c.subtext, marginRight: 2 }}>星期</span>
-            {weekLabels.map(([day,label]) => <button key={day} onClick={() => toggleWeekday(day)} style={{ width: 27, height: 27, borderRadius: 999, fontSize: 10.5, background: weekdays.has(day) ? c.accent : c.hover, color: weekdays.has(day) ? c.accentText : c.subtext }}>{label}</button>)}
+            {weekdayButtons.map(([day, label]) => (
+              <button key={day} onClick={() => toggleWeeklyDay(day)} style={{ width: 27, height: 27, borderRadius: 999, fontSize: 10.5, background: weeklyDays.includes(day) ? c.accent : c.hover, color: weeklyDays.includes(day) ? c.accentText : c.subtext }}>{label}</button>
+            ))}
           </div>
         )}
 
         <div>
-          <div style={{ fontSize: 11.5, color: c.subtext, marginBottom: 6 }}>应用日期</div>
+          <div className="flex items-center justify-between" style={{ marginBottom: 6 }}>
+            <span style={{ fontSize: 11.5, color: c.subtext }}>应用到哪些天</span>
+            <button onClick={() => { setSelected(new Set()); setRangeError(""); }} style={{ fontSize: 10.5, color: c.subtext }}>清除选择</button>
+          </div>
           <div className="flex items-center" style={{ gap: 5, marginBottom: 8, flexWrap: "wrap" }}>
             {[["today", "今天"], ["tomorrow", "明天"], ["week", "未来7天"], ["month", "未来30天"], ["custom", "自定义范围"]].map(([k, label]) => (
-              <button key={k} onClick={() => quickSelect(k)} style={{ fontSize: 10.5, padding: "4px 8px", borderRadius: 999, background: k === "custom" && customRangeOpen ? c.accent : c.hover, color: k === "custom" && customRangeOpen ? c.accentText : c.subtext }}>{label}</button>
+              <button key={k} onClick={() => quickSelect(k)} style={{ fontSize: 10.5, padding: "4px 8px", borderRadius: 999, background: k === "custom" && rangeOpen ? c.accent : c.hover, color: k === "custom" && rangeOpen ? c.accentText : c.subtext }}>{label}</button>
             ))}
           </div>
-          {customRangeOpen && (
-            <div className="flex items-center" style={{ gap: 5, marginBottom: 8 }}>
-              <input type="date" value={rangeStart} onChange={(e) => setRangeStart(e.target.value)} style={{ flex: 1, minWidth: 0, fontSize: 10.5, padding: "5px 5px", borderRadius: 7, background: c.inputBg, color: c.text, border: "none", outline: "none" }} />
-              <span style={{ fontSize: 10, color: c.subtext }}>至</span>
-              <input type="date" value={rangeEnd} onChange={(e) => setRangeEnd(e.target.value)} style={{ flex: 1, minWidth: 0, fontSize: 10.5, padding: "5px 5px", borderRadius: 7, background: c.inputBg, color: c.text, border: "none", outline: "none" }} />
-              <button onClick={applyCustomRange} style={{ fontSize: 10.5, padding: "5px 7px", borderRadius: 7, background: c.accent, color: c.accentText, flexShrink: 0 }}>应用</button>
+          {rangeOpen && (
+            <div style={{ padding: 8, borderRadius: 9, background: c.hover, marginBottom: 8 }}>
+              <div className="flex items-center" style={{ gap: 5 }}>
+                <input type="date" value={rangeStart} onChange={(e) => setRangeStart(e.target.value)} style={{ flex: 1, minWidth: 0, fontSize: 10.5, padding: "5px 5px", borderRadius: 7, background: c.window, color: c.text, border: "none", outline: "none" }} />
+                <span style={{ fontSize: 10, color: c.subtext }}>至</span>
+                <input type="date" value={rangeEnd} onChange={(e) => setRangeEnd(e.target.value)} style={{ flex: 1, minWidth: 0, fontSize: 10.5, padding: "5px 5px", borderRadius: 7, background: c.window, color: c.text, border: "none", outline: "none" }} />
+                <button onClick={() => selectRange(dateFromIso(rangeStart), dateFromIso(rangeEnd))} style={{ fontSize: 10.5, padding: "5px 7px", borderRadius: 7, background: c.accent, color: c.accentText, flexShrink: 0 }}>应用</button>
+              </div>
+              <div style={{ fontSize: 9.5, color: c.subtext, marginTop: 5 }}>按上面的重复方式自动筛选日期，不需要逐天点击。</div>
             </div>
           )}
+          {rangeError && <div style={{ fontSize: 10, color: c.overdueText, marginBottom: 6 }}>{rangeError}</div>}
           <div className="flex items-center justify-between" style={{ marginBottom: 4 }}>
             <IconButton c={c} onClick={() => setMonthDate((d) => new Date(d.getFullYear(), d.getMonth() - 1, 1))} title="上个月"><ChevronLeft size={14} /></IconButton>
             <span style={{ fontSize: 12, color: c.text, fontWeight: 600 }}>{monthDate.getFullYear()}年{monthDate.getMonth() + 1}月</span>
@@ -635,67 +667,58 @@ function BatchAddModal({ c, onClose, onSubmit, initialDate, today, repeatPlans =
           <div className="grid grid-cols-7" style={{ gap: 3 }}>
             {cells.map((d, i) => {
               if (!d) return <div key={i} />;
-              const k = dateKey(d), isSel = selected.has(k), isToday = k === dateKey(today);
+              const k = dateKey(d); const isSel = selected.has(k); const isToday = k === dateKey(today);
               return <button key={i} onClick={() => toggleDate(d)} style={{ fontSize: 11, padding: "5px 0", borderRadius: 8, background: isSel ? c.accent : isToday ? c.hover : "transparent", color: isSel ? c.accentText : c.text, fontWeight: isToday ? 700 : 400 }}>{d.getDate()}</button>;
             })}
           </div>
+          <div style={{ fontSize: 10, color: c.subtext, marginTop: 6 }}>已选择 {selected.size} 天</div>
         </div>
 
-        {rangeError && <div style={{ fontSize: 10.5, color: c.overdueText }}>{rangeError}</div>}
-        <button onClick={handleSubmit} disabled={!text.trim() || effectiveKeys.length === 0} style={{ padding: "10px 0", borderRadius: 10, background: c.accent, color: c.accentText, fontSize: 13, fontWeight: 650, opacity: !text.trim() || effectiveKeys.length === 0 ? .45 : 1 }}>
-          添加到 {effectiveKeys.length} 天
-        </button>
+        <button onClick={handleSubmit} disabled={!text.trim() || selected.size === 0} style={{ marginTop: 2, padding: "9px 0", borderRadius: 10, background: c.accent, color: c.accentText, fontSize: 13, fontWeight: 650, opacity: text.trim() && selected.size ? 1 : .45 }}>添加到 {selected.size} 天</button>
 
-        <div style={{ borderTop: `1px solid ${c.divider}`, paddingTop: 8 }}>
-          <button onClick={() => { setManageOpen((v) => !v); setEditingPlan(null); setDeletePlanId(null); }} className="flex items-center justify-between" style={{ width: "100%", color: c.text, fontSize: 11.5, fontWeight: 600 }}>
-            <span>已保存的重复计划（{repeatPlans.length}）</span>{manageOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+        <div style={{ borderTop: `1px solid ${c.divider}`, paddingTop: 9 }}>
+          <button onClick={() => setShowPlans((v) => !v)} className="flex items-center justify-between" style={{ width: "100%", color: c.text }}>
+            <span className="flex items-center" style={{ gap: 5, fontSize: 11.5, fontWeight: 650 }}><Repeat size={12} /> 已保存重复计划（{normalizedPlans.length}）</span>
+            {showPlans ? <ChevronUp size={13} color={c.subtext} /> : <ChevronDown size={13} color={c.subtext} />}
           </button>
-          {manageOpen && (
-            <div style={{ marginTop: 7, display: "flex", flexDirection: "column", gap: 5 }}>
-              {repeatPlans.length === 0 && <div style={{ fontSize: 10.5, color: c.subtext, textAlign: "center", padding: "8px 0" }}>还没有重复计划</div>}
-              {repeatPlans.map((plan) => (
-                <div key={plan.id} style={{ padding: "7px 8px", borderRadius: 9, background: c.hover }}>
-                  <div className="flex items-center" style={{ gap: 6 }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 11.5, color: plan.enabled === false ? c.subtext : c.text, textDecoration: plan.enabled === false ? "line-through" : "none", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{plan.time ? `${plan.time} ` : ""}{plan.text}</div>
-                      <div style={{ fontSize: 9.5, color: c.subtext, marginTop: 2 }}>{repeatPlanLabel(plan)} · {plan.startKey} 至 {plan.endKey}{plan.enabled === false ? " · 已暂停" : ""}</div>
+          {showPlans && (
+            <div style={{ marginTop: 7, display: "flex", flexDirection: "column", gap: 6 }}>
+              {normalizedPlans.length === 0 && <div style={{ fontSize: 10.5, color: c.subtext, textAlign: "center", padding: "8px 0" }}>还没有重复计划</div>}
+              {normalizedPlans.map((plan) => (
+                <div key={plan.id} style={{ padding: "7px 8px", borderRadius: 9, background: editingPlanId === plan.id ? c.hover : "transparent", border: `1px solid ${c.divider}` }}>
+                  {editingPlanId === plan.id && planDraft ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      <input value={planDraft.text || ""} onChange={(e) => setPlanDraft({ ...planDraft, text: e.target.value })} style={{ width: "100%", boxSizing: "border-box", fontSize: 11.5, padding: "6px 7px", borderRadius: 7, background: c.inputBg, color: c.text, border: "none", outline: "none" }} />
+                      <div className="flex items-center" style={{ gap: 6 }}>
+                        <input type="time" value={planDraft.time || ""} onChange={(e) => setPlanDraft({ ...planDraft, time: e.target.value })} style={{ width: 105, fontSize: 10.5, padding: "5px 6px", borderRadius: 7, background: c.inputBg, color: c.text, border: "none", outline: "none" }} />
+                        <select value={planDraft.repeat || "daily"} onChange={(e) => setPlanDraft({ ...planDraft, repeat: e.target.value })} style={{ flex: 1, fontSize: 10.5, padding: "5px 6px", borderRadius: 7, background: c.inputBg, color: c.text, border: "none", outline: "none" }}>
+                          <option value="none">不再重复</option><option value="daily">每天</option><option value="weekly">每周指定星期</option><option value="weekdays">工作日</option>
+                        </select>
+                      </div>
+                      {planDraft.repeat === "weekly" && <div className="flex items-center" style={{ gap: 4 }}>{weekdayButtons.map(([day,label]) => <button key={day} onClick={() => toggleWeeklyDay(day, true)} style={{ width: 25, height: 25, borderRadius: 999, fontSize: 10, background: (planDraft.weekdays || []).includes(day) ? c.accent : c.inputBg, color: (planDraft.weekdays || []).includes(day) ? c.accentText : c.subtext }}>{label}</button>)}</div>}
+                      <div className="flex items-center" style={{ gap: 6 }}>
+                        <button onClick={savePlanEdit} style={{ flex: 1, padding: "6px 0", borderRadius: 7, background: c.accent, color: c.accentText, fontSize: 10.5 }}>保存</button>
+                        <button onClick={() => { setEditingPlanId(null); setPlanDraft(null); }} style={{ flex: 1, padding: "6px 0", borderRadius: 7, background: c.inputBg, color: c.subtext, fontSize: 10.5 }}>取消</button>
+                      </div>
                     </div>
-                    <button onClick={() => beginEditPlan(plan)} title="编辑" style={{ color: c.subtext, display: "flex" }}><Pencil size={12} /></button>
-                    <button onClick={() => onTogglePlan?.(plan.id)} style={{ fontSize: 9.5, padding: "3px 6px", borderRadius: 999, background: plan.enabled === false ? c.accent : c.inputBg, color: plan.enabled === false ? c.accentText : c.subtext }}>{plan.enabled === false ? "恢复" : "暂停"}</button>
-                    <button onClick={() => setDeletePlanId(deletePlanId === plan.id ? null : plan.id)} title="删除" style={{ color: c.overdueText, display: "flex" }}><X size={12} /></button>
-                  </div>
-                  {deletePlanId === plan.id && (
-                    <div className="flex items-center" style={{ gap: 5, marginTop: 6 }}>
-                      <button onClick={() => { onDeletePlan?.(plan.id, false); setDeletePlanId(null); }} style={{ flex: 1, fontSize: 9.5, padding: "5px 4px", borderRadius: 7, background: c.inputBg, color: c.text }}>仅删除重复计划</button>
-                      <button onClick={() => { onDeletePlan?.(plan.id, true); setDeletePlanId(null); }} style={{ flex: 1, fontSize: 9.5, padding: "5px 4px", borderRadius: 7, background: c.overdueBg, color: c.overdueText }}>并删未执行任务</button>
-                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-start justify-between" style={{ gap: 6 }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: 11.5, color: c.text, fontWeight: 600, wordBreak: "break-word" }}>{plan.time ? `${plan.time} ` : ""}{plan.text}</div>
+                          <div style={{ fontSize: 9.5, color: c.subtext, marginTop: 2 }}>{repeatPlanLabel(plan)}{plan.startDate && plan.endDate ? ` · ${plan.startDate} 至 ${plan.endDate}` : ""}{plan.enabled === false ? " · 已暂停" : ""}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center" style={{ gap: 5, marginTop: 6 }}>
+                        <button onClick={() => beginPlanEdit(plan)} style={{ fontSize: 10, padding: "4px 7px", borderRadius: 7, background: c.hover, color: c.text }}>编辑</button>
+                        <button onClick={() => onTogglePlan(plan.id)} style={{ fontSize: 10, padding: "4px 7px", borderRadius: 7, background: c.hover, color: plan.enabled === false ? c.accent : c.subtext }}>{plan.enabled === false ? "恢复" : "暂停"}</button>
+                        <button onClick={() => requestDeletePlan(plan.id)} style={{ marginLeft: "auto", fontSize: 10, padding: "4px 7px", borderRadius: 7, background: confirmDeletePlanId === plan.id ? c.overdueBg : "transparent", color: c.overdueText }}>{confirmDeletePlanId === plan.id ? "确定删除？" : "删除"}</button>
+                      </div>
+                    </>
                   )}
                 </div>
               ))}
-
-              {editingPlan && (
-                <div style={{ marginTop: 4, padding: 9, borderRadius: 9, border: `1px solid ${c.divider}` }}>
-                  <div style={{ fontSize: 10.5, color: c.subtext, marginBottom: 6 }}>编辑重复计划</div>
-                  <input value={editingPlan.text} onChange={(e) => setEditingPlan({ ...editingPlan, text: e.target.value })} placeholder="任务名称" style={{ width: "100%", boxSizing: "border-box", fontSize: 11.5, padding: "6px 7px", borderRadius: 7, background: c.inputBg, color: c.text, border: "none", outline: "none", marginBottom: 5 }} />
-                  <div className="flex items-center" style={{ gap: 5, marginBottom: 5 }}>
-                    <input type="time" value={editingPlan.time || ""} onChange={(e) => setEditingPlan({ ...editingPlan, time: e.target.value || null })} style={{ width: 94, fontSize: 10.5, padding: "5px 6px", borderRadius: 7, background: c.inputBg, color: c.text, border: "none", outline: "none" }} />
-                    <select value={editingPlan.repeat} onChange={(e) => setEditingPlan({ ...editingPlan, repeat: e.target.value })} style={{ flex: 1, fontSize: 10.5, padding: "5px 6px", borderRadius: 7, background: c.inputBg, color: c.text, border: "none", outline: "none" }}>
-                      <option value="daily">每天</option><option value="weekly">每周指定星期</option><option value="weekdays">工作日</option>
-                    </select>
-                  </div>
-                  {editingPlan.repeat === "weekly" && <div className="flex items-center" style={{ gap: 4, marginBottom: 5 }}>{weekLabels.map(([day,label]) => <button key={day} onClick={() => editToggleWeekday(day)} style={{ width: 24, height: 24, borderRadius: 999, fontSize: 9.5, background: editingPlan.weekdays.includes(day) ? c.accent : c.inputBg, color: editingPlan.weekdays.includes(day) ? c.accentText : c.subtext }}>{label}</button>)}</div>}
-                  <div className="flex items-center" style={{ gap: 5 }}>
-                    <input type="date" value={toIsoDate(dateFromKey(editingPlan.startKey))} onChange={(e) => setEditingPlan({ ...editingPlan, startKey: dateKey(dateFromIso(e.target.value)) })} style={{ flex: 1, minWidth: 0, fontSize: 9.5, padding: "5px 4px", borderRadius: 7, background: c.inputBg, color: c.text, border: "none", outline: "none" }} />
-                    <span style={{ fontSize: 9, color: c.subtext }}>至</span>
-                    <input type="date" value={toIsoDate(dateFromKey(editingPlan.endKey))} onChange={(e) => setEditingPlan({ ...editingPlan, endKey: dateKey(dateFromIso(e.target.value)) })} style={{ flex: 1, minWidth: 0, fontSize: 9.5, padding: "5px 4px", borderRadius: 7, background: c.inputBg, color: c.text, border: "none", outline: "none" }} />
-                  </div>
-                  <div style={{ fontSize: 9, color: c.subtext, marginTop: 5 }}>修改只重排未完成且未开始的任务；已完成或已有专注记录的历史任务会保留。</div>
-                  <div className="flex items-center" style={{ gap: 5, marginTop: 7 }}>
-                    <button onClick={() => setEditingPlan(null)} style={{ flex: 1, padding: "6px 0", borderRadius: 7, background: c.inputBg, color: c.subtext, fontSize: 10.5 }}>取消</button>
-                    <button onClick={saveEditedPlan} style={{ flex: 1, padding: "6px 0", borderRadius: 7, background: c.accent, color: c.accentText, fontSize: 10.5, fontWeight: 600 }}>保存修改</button>
-                  </div>
-                </div>
-              )}
+              <div style={{ fontSize: 9.5, color: c.subtext, lineHeight: 1.45 }}>暂停或删除这里只影响重复计划管理，不会删除已经生成、已经完成的历史任务和任务记录。</div>
             </div>
           )}
         </div>
@@ -791,7 +814,12 @@ function RecordsModal({ c, sessions, onClose, onClear }) {
   const exportCsv = () => {
     const rows = [["日期", "任务", "开始时间", "结束时间", "花费时间(秒)"]];
     filtered.forEach((s) => rows.push([s.dateKey, s.taskText, fmtTime(s.start), fmtTime(s.end), s.seconds]));
-    const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const csv = rows.map((r) => r.map((v) => {
+      const value = String(v);
+      // Prevent spreadsheet applications from evaluating user-controlled cells as formulas.
+      const safeValue = /^[\u0000-\u0020\uFEFF]*[=+\-@]/.test(value) ? `'${value}` : value;
+      return `"${safeValue.replace(/"/g, '""')}"`;
+    }).join(",")).join("\n");
     const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -1114,183 +1142,6 @@ function SoundSettingsModal({ c, settings, onChange, onClose, onTest }) {
   );
 }
 
-/* ---------- 应用密码与自动锁 ---------- */
-function SecurityModal({ c, status, onClose, onStatusChange }) {
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [removeConfirm, setRemoveConfirm] = useState(false);
-
-  const savePassword = async () => {
-    setMessage("");
-    if (newPassword.length < 4) { setMessage("密码至少需要4个字符"); return; }
-    if (newPassword !== confirmPassword) { setMessage("两次输入的新密码不一致"); return; }
-    setBusy(true);
-    try {
-      const result = await window.desktopAPI?.security?.setPassword?.(status.enabled ? currentPassword : "", newPassword);
-      if (result?.ok) {
-        onStatusChange({ enabled: true, locked: false });
-        setCurrentPassword(""); setNewPassword(""); setConfirmPassword("");
-        setMessage(status.enabled ? "密码已修改" : "密码已设置。以后启动软件、电脑锁屏或睡眠后都需要解锁。 ");
-      } else setMessage(result?.error || "保存密码失败");
-    } catch { setMessage("保存密码失败"); }
-    setBusy(false);
-  };
-
-  const removePassword = async () => {
-    if (!removeConfirm) { setRemoveConfirm(true); setMessage("再点一次即可移除密码保护"); return; }
-    setBusy(true); setMessage("");
-    try {
-      const result = await window.desktopAPI?.security?.removePassword?.(currentPassword);
-      if (result?.ok) {
-        onStatusChange({ enabled: false, locked: false });
-        setCurrentPassword(""); setNewPassword(""); setConfirmPassword(""); setRemoveConfirm(false);
-        setMessage("密码保护已关闭");
-      } else setMessage(result?.error || "移除密码失败");
-    } catch { setMessage("移除密码失败"); }
-    setBusy(false);
-  };
-
-  const lockNow = async () => {
-    setMessage("");
-    try {
-      const result = await window.desktopAPI?.security?.lock?.();
-      if (result?.locked) onStatusChange({ enabled: true, locked: true });
-      else setMessage(result?.error || "无法锁定");
-    } catch { setMessage("无法锁定"); }
-  };
-
-  return (
-    <div style={{ position: "absolute", inset: 0, background: "rgba(20,20,18,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60 }}>
-      <div style={{ width: 325, maxHeight: 600, overflowY: "auto", background: c.window, borderRadius: 16, padding: 16, boxShadow: "0 20px 50px rgba(0,0,0,.35)" }}>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center" style={{ gap: 7 }}><Lock size={15} color={status.enabled ? c.accent : c.subtext} /><span style={{ fontSize: 14.5, fontWeight: 650, color: c.text }}>密码与自动锁</span></div>
-          <button onClick={onClose} style={{ color: c.subtext }}><X size={15} /></button>
-        </div>
-
-        <div style={{ marginTop: 11, padding: "8px 10px", borderRadius: 9, background: c.hover, fontSize: 11.5, color: c.subtext, lineHeight: 1.55 }}>
-          {status.enabled ? "密码保护已开启。电脑锁屏、睡眠或重新启动“今日”后，软件会自动锁定。" : "设置密码后，电脑锁屏、睡眠或重新启动“今日”时会自动锁定软件。"}
-        </div>
-
-        {status.enabled && (
-          <>
-            <div style={{ fontSize: 11, color: c.subtext, marginTop: 12, marginBottom: 4 }}>当前密码</div>
-            <input type="password" value={currentPassword} onChange={(e) => { setCurrentPassword(e.target.value); setRemoveConfirm(false); }} placeholder="修改或关闭密码时需要"
-              style={{ width: "100%", boxSizing: "border-box", fontSize: 13, padding: "8px 9px", borderRadius: 9, border: "none", outline: "none", background: c.inputBg, color: c.text }} />
-          </>
-        )}
-
-        <div style={{ fontSize: 11, color: c.subtext, marginTop: 10, marginBottom: 4 }}>{status.enabled ? "新密码" : "设置密码"}</div>
-        <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="至少4个字符"
-          style={{ width: "100%", boxSizing: "border-box", fontSize: 13, padding: "8px 9px", borderRadius: 9, border: "none", outline: "none", background: c.inputBg, color: c.text }} />
-        <div style={{ fontSize: 11, color: c.subtext, marginTop: 8, marginBottom: 4 }}>确认新密码</div>
-        <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && savePassword()} placeholder="再次输入"
-          style={{ width: "100%", boxSizing: "border-box", fontSize: 13, padding: "8px 9px", borderRadius: 9, border: "none", outline: "none", background: c.inputBg, color: c.text }} />
-
-        {message && <div style={{ fontSize: 10.5, color: message.includes("失败") || message.includes("不正确") || message.includes("不一致") ? c.overdueText : c.subtext, marginTop: 8, lineHeight: 1.45 }}>{message}</div>}
-
-        <button disabled={busy} onClick={savePassword} style={{ width: "100%", marginTop: 12, padding: "9px 0", borderRadius: 9, background: c.accent, color: c.accentText, fontSize: 12.5, fontWeight: 650, opacity: busy ? .6 : 1 }}>
-          {status.enabled ? "保存新密码" : "开启密码保护"}
-        </button>
-
-        {status.enabled && (
-          <div style={{ borderTop: `1px solid ${c.divider}`, marginTop: 11, paddingTop: 10, display: "flex", gap: 7 }}>
-            <button disabled={busy} onClick={lockNow} style={{ flex: 1, padding: "8px 0", borderRadius: 9, background: c.hover, color: c.text, fontSize: 11.5 }}>立即锁定</button>
-            <button disabled={busy} onClick={removePassword} style={{ flex: 1, padding: "8px 0", borderRadius: 9, background: removeConfirm ? c.overdueBg : c.hover, color: removeConfirm ? c.overdueText : c.subtext, fontSize: 11.5 }}>{removeConfirm ? "确认关闭密码" : "关闭密码保护"}</button>
-          </div>
-        )}
-
-        <div style={{ marginTop: 10, fontSize: 10, color: c.subtext, lineHeight: 1.5 }}>密码只保存为不可逆的加密哈希，不保存明文。请牢记密码；软件没有找回密码功能。</div>
-      </div>
-    </div>
-  );
-}
-
-function AppLockScreen({ c, onUnlocked }) {
-  const [password, setPassword] = useState("");
-  const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState(false);
-  const unlock = async () => {
-    if (!password) return;
-    setBusy(true); setMessage("");
-    try {
-      const result = await window.desktopAPI?.security?.verify?.(password);
-      if (result?.ok) { setPassword(""); onUnlocked({ enabled: true, locked: false }); }
-      else { setMessage(result?.error || "密码不正确"); setPassword(""); }
-    } catch { setMessage("解锁失败，请重试"); }
-    setBusy(false);
-  };
-  return (
-    <div style={{ background: c.bg, minHeight: 660, padding: 12, fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif" }} className="flex items-center justify-center">
-      <div style={{ width: 380, height: 660, background: c.window, borderRadius: 20, boxShadow: "0 24px 60px -20px rgba(0,0,0,0.25)", border: `1px solid ${c.divider}`, display: "flex", alignItems: "center", justifyContent: "center", padding: 30, boxSizing: "border-box" }}>
-        <div style={{ width: "100%", maxWidth: 270, textAlign: "center" }}>
-          <div style={{ width: 50, height: 50, margin: "0 auto 14px", borderRadius: 999, background: c.hover, display: "flex", alignItems: "center", justifyContent: "center" }}><Lock size={22} color={c.accent} /></div>
-          <div style={{ fontSize: 20, fontWeight: 650, color: c.text }}>今日已锁定</div>
-          <div style={{ fontSize: 11.5, color: c.subtext, marginTop: 6, lineHeight: 1.5 }}>输入你设置的软件密码继续使用</div>
-          <input autoFocus type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && unlock()} placeholder="输入密码"
-            style={{ width: "100%", boxSizing: "border-box", marginTop: 18, fontSize: 14, padding: "10px 11px", borderRadius: 10, border: "none", outline: "none", background: c.inputBg, color: c.text, textAlign: "center" }} />
-          {message && <div style={{ marginTop: 8, fontSize: 11, color: c.overdueText }}>{message}</div>}
-          <button disabled={busy || !password} onClick={unlock} style={{ width: "100%", marginTop: 12, padding: "10px 0", borderRadius: 10, background: c.accent, color: c.accentText, fontSize: 13, fontWeight: 650, opacity: busy || !password ? .55 : 1 }}>解锁</button>
-          <div style={{ marginTop: 14, fontSize: 9.5, color: c.subtext }}>电脑解锁后，“今日”仍会保持锁定，直到密码验证成功。</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ---------- 配置备份与恢复 ---------- */
-function BackupModal({ c, onClose, onBeforeExport }) {
-  const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [confirmImport, setConfirmImport] = useState(false);
-
-  const exportBackup = async () => {
-    setBusy(true); setMessage(""); setConfirmImport(false);
-    try {
-      await onBeforeExport?.();
-      const result = await window.desktopAPI?.backup?.export?.();
-      if (result?.ok) setMessage(`备份已导出：${result.fileName || "备份文件"}`);
-      else if (!result?.canceled) setMessage(result?.error || "导出失败");
-    } catch { setMessage("导出失败"); }
-    setBusy(false);
-  };
-
-  const importBackup = async () => {
-    if (!confirmImport) { setConfirmImport(true); setMessage("导入会覆盖当前数据。请再点一次“选择备份并恢复”。"); return; }
-    setBusy(true); setMessage("请选择备份文件…");
-    try {
-      const result = await window.desktopAPI?.backup?.import?.();
-      if (result?.ok) setMessage("恢复成功，软件正在自动重启…");
-      else if (result?.canceled) { setMessage(""); setConfirmImport(false); }
-      else setMessage(result?.error || "恢复失败");
-    } catch { setMessage("恢复失败"); }
-    setBusy(false);
-  };
-
-  return (
-    <div style={{ position: "absolute", inset: 0, background: "rgba(20,20,18,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 61 }}>
-      <div style={{ width: 325, background: c.window, borderRadius: 16, padding: 16, boxShadow: "0 20px 50px rgba(0,0,0,.35)" }}>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center" style={{ gap: 7 }}><Download size={15} color={c.accent} /><span style={{ fontSize: 14.5, fontWeight: 650, color: c.text }}>备份与恢复</span></div>
-          <button onClick={onClose} style={{ color: c.subtext }}><X size={15} /></button>
-        </div>
-        <div style={{ marginTop: 10, fontSize: 11.5, color: c.subtext, lineHeight: 1.55 }}>导出的单个 <b>.todaybackup</b> 文件会保存任务、完成状态、专注记录、倒计时、列表设置、主题、密码保护设置和自定义提醒铃声。换电脑后安装“今日”，再导入这个文件即可恢复。</div>
-
-        <button disabled={busy} onClick={exportBackup} className="flex items-center justify-center" style={{ width: "100%", gap: 7, marginTop: 14, padding: "10px 0", borderRadius: 10, background: c.accent, color: c.accentText, fontSize: 12.5, fontWeight: 650, opacity: busy ? .6 : 1 }}><Download size={14} /> 导出全部配置与数据</button>
-
-        <div style={{ borderTop: `1px solid ${c.divider}`, marginTop: 12, paddingTop: 12 }}>
-          <button disabled={busy} onClick={importBackup} className="flex items-center justify-center" style={{ width: "100%", gap: 7, padding: "10px 0", borderRadius: 10, background: confirmImport ? c.overdueBg : c.hover, color: confirmImport ? c.overdueText : c.text, fontSize: 12.5, fontWeight: 600, opacity: busy ? .6 : 1 }}><Upload size={14} /> {confirmImport ? "选择备份并恢复" : "导入备份"}</button>
-          <div style={{ fontSize: 10, color: c.subtext, marginTop: 7, lineHeight: 1.5 }}>导入会覆盖这台电脑当前的“今日”数据，并在恢复后自动重启软件。建议导入前先导出一次当前数据。</div>
-        </div>
-
-        {message && <div style={{ marginTop: 10, padding: "7px 9px", borderRadius: 8, background: c.inputBg, fontSize: 10.5, color: message.includes("失败") ? c.overdueText : c.subtext, lineHeight: 1.45, wordBreak: "break-word" }}>{message}</div>}
-      </div>
-    </div>
-  );
-}
-
 /* ---------- 主组件 ---------- */
 export default function TodayApp() {
   const today = startOfDay(new Date());
@@ -1316,10 +1167,6 @@ export default function TodayApp() {
   const [editingTaskId, setEditingTaskId] = useState(null);
   const [reminderTaskId, setReminderTaskId] = useState(null);
   const [showSoundSettings, setShowSoundSettings] = useState(false);
-  const [showSecuritySettings, setShowSecuritySettings] = useState(false);
-  const [showBackupSettings, setShowBackupSettings] = useState(false);
-  const [securityStatus, setSecurityStatus] = useState({ enabled: false, locked: false });
-  const [securityReady, setSecurityReady] = useState(!window.desktopAPI?.security);
   const [soundSettings, setSoundSettings] = useState({ mode: "default", name: "" });
   const [taskListPrefs, setTaskListPrefs] = useState({ incompleteFirst: true, completedLast: true, onlyIncomplete: false });
   const [runtimeCheckpoint, setRuntimeCheckpoint] = useState(0);
@@ -1344,27 +1191,6 @@ export default function TodayApp() {
   const idRef = useRef(1000);
   const nextId = () => { idRef.current += 1; return idRef.current; };
 
-  /* ---- 应用密码状态：主进程负责校验与 Windows 锁屏事件 ---- */
-  useEffect(() => {
-    let cancelled = false;
-    const api = window.desktopAPI?.security;
-    if (!api) { setSecurityReady(true); return undefined; }
-    (async () => {
-      try {
-        const status = await api.status();
-        if (!cancelled && status) setSecurityStatus({ enabled: !!status.enabled, locked: !!status.locked });
-      } catch {}
-      if (!cancelled) setSecurityReady(true);
-    })();
-    const off = api.onState?.((status) => {
-      if (!status || cancelled) return;
-      setSecurityStatus({ enabled: !!status.enabled, locked: !!status.locked });
-      setSecurityReady(true);
-      if (status.locked) { setShowSecuritySettings(false); setShowBackupSettings(false); }
-    });
-    return () => { cancelled = true; off?.(); };
-  }, []);
-
   /* ---- 载入已保存的数据（跨会话持久化） ---- */
   useEffect(() => {
     let cancelled = false;
@@ -1375,13 +1201,16 @@ export default function TodayApp() {
           : JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
         if (data && !cancelled) {
           if (typeof data.idCounter === "number") idRef.current = Math.max(idRef.current, data.idCounter);
-          let savedTasks = data.tasksByDate && typeof data.tasksByDate === "object" ? data.tasksByDate : null;
+          const savedTasks = data.tasksByDate && typeof data.tasksByDate === "object" ? data.tasksByDate : null;
+          let migratedTasks = savedTasks;
           if (savedTasks) {
-            const migrated = migrateRepeatPlanData(savedTasks, data.repeatPlans);
-            savedTasks = migrated.tasksByDate;
-            setTasksByDate(savedTasks);
+            const migrated = migrateRepeatPlans(savedTasks, data.repeatPlans);
+            migratedTasks = migrated.tasksByDate;
+            setTasksByDate(migrated.tasksByDate);
             setRepeatPlans(migrated.repeatPlans);
-          } else if (Array.isArray(data.repeatPlans)) setRepeatPlans(data.repeatPlans);
+          } else if (Array.isArray(data.repeatPlans)) {
+            setRepeatPlans(data.repeatPlans);
+          }
           let restoredSessions = normalizeSessions(data.sessions);
           const runtime = data.timerRuntime;
           if (runtime?.openSession?.taskId && Number(runtime.openSession.elapsedMs) > 0) {
@@ -1394,9 +1223,9 @@ export default function TodayApp() {
           setSessions(restoredSessions);
           if (Array.isArray(data.countdowns)) setCountdowns(data.countdowns);
           const restoredTimerStates = data.taskTimerStates && typeof data.taskTimerStates === "object" ? { ...data.taskTimerStates } : {};
-          if (runtime?.activeTaskId && savedTasks) {
+          if (runtime?.activeTaskId && migratedTasks) {
             let exists = false;
-            for (const list of Object.values(savedTasks)) if (Array.isArray(list) && list.some((t) => t.id === runtime.activeTaskId && !t.done)) { exists = true; break; }
+            for (const list of Object.values(migratedTasks)) if (Array.isArray(list) && list.some((t) => t.id === runtime.activeTaskId && !t.done)) { exists = true; break; }
             if (exists) {
               const rr = Math.max(0, Math.floor(Number(runtime.remaining) || 0));
               restoredTimerStates[runtime.activeTaskId] = rr;
@@ -1594,20 +1423,20 @@ export default function TodayApp() {
       setTasks((list) => [...list, { id: nextId(), text, time, note: "", reminderTime: time, reminderEnabled: !!time, done: false, repeat: "none" }]);
     } else {
       const dates = repeatDates(selectedDate, repeat);
-      const planId = makeRepeatPlanId();
-      const plan = {
-        id: planId, text, time, repeat,
-        weekdays: repeat === "weekly" ? [selectedDate.getDay()] : [],
-        startKey: dateKey(dates[0] || selectedDate),
-        endKey: dateKey(dates[dates.length - 1] || selectedDate),
-        enabled: true, createdAt: Date.now(),
-      };
-      setRepeatPlans((prev) => [...prev, plan]);
+      const repeatPlanId = makeRepeatPlanId();
+      const weekdays = repeat === "weekdays" ? [1, 2, 3, 4, 5] : repeat === "weekly" ? [selectedDate.getDay()] : [];
+      setRepeatPlans((plans) => [...plans, {
+        id: repeatPlanId, text, time, repeat, enabled: true,
+        startDate: dates.length ? toIsoDate(dates[0]) : toIsoDate(selectedDate),
+        endDate: dates.length ? toIsoDate(dates[dates.length - 1]) : toIsoDate(selectedDate),
+        weekdays,
+      }]);
       setTasksByDate((prev) => {
         const next = { ...prev };
         dates.forEach((d) => {
-          const k2 = dateKey(d), list = next[k2] ? [...next[k2]] : [];
-          list.push({ id: nextId(), text, time, note: "", reminderTime: time, reminderEnabled: !!time, done: false, repeat, repeatPlanId: planId });
+          const k2 = dateKey(d);
+          const list = next[k2] ? [...next[k2]] : [];
+          list.push({ id: nextId(), text, time, note: "", reminderTime: time, reminderEnabled: !!time, done: false, repeat, repeatPlanId });
           next[k2] = list;
         });
         return next;
@@ -1615,104 +1444,57 @@ export default function TodayApp() {
     }
   };
   const addFromTemplate = (tpl) => {
-    setTasks((list) => [...list, { id: nextId(), text: tpl.text, time: tpl.time, note: "", reminderTime: tpl.time || null, reminderEnabled: !!tpl.time, done: false, repeat: "none" }]);
+    setTasks((list) => [...list, { id: nextId(), text: tpl.text, time: tpl.time, note: "", reminderTime: tpl.time || null, reminderEnabled: !!tpl.time, done: false, repeat: tpl.repeat, repeatPlanId: tpl.id }]);
     setAdding(false);
   };
-  const addBatch = (dateKeys, parsedLines, meta = {}) => {
-    const repeat = meta.repeat || "none";
-    if (repeat === "none") {
-      setTasksByDate((prev) => {
-        const next = { ...prev };
-        dateKeys.forEach((k2) => {
-          const list = next[k2] ? [...next[k2]] : [];
-          parsedLines.forEach((p) => list.push({ id: nextId(), text: p.text, time: p.time, note: "", reminderTime: p.time || null, reminderEnabled: !!p.time, done: false, repeat: "none" }));
-          next[k2] = list;
-        });
-        return next;
-      });
-    } else {
-      const createdPlans = parsedLines.map((p) => ({
-        id: makeRepeatPlanId(), text: p.text, time: p.time || null, repeat,
-        weekdays: repeat === "weekly" ? (Array.isArray(meta.weekdays) ? [...meta.weekdays] : []) : [],
-        startKey: meta.startKey || dateKeys[0], endKey: meta.endKey || dateKeys[dateKeys.length - 1],
-        enabled: true, createdAt: Date.now(),
-      }));
-      setRepeatPlans((prev) => [...prev, ...createdPlans]);
-      setTasksByDate((prev) => {
-        const next = { ...prev };
-        dateKeys.forEach((k2) => {
-          const list = next[k2] ? [...next[k2]] : [];
-          createdPlans.forEach((plan) => list.push({ id: nextId(), text: plan.text, time: plan.time, note: "", reminderTime: plan.time || null, reminderEnabled: !!plan.time, done: false, repeat: plan.repeat, repeatPlanId: plan.id }));
-          next[k2] = list;
-        });
-        return next;
-      });
-    }
-    setShowBatchModal(false);
-  };
-
-  const rebuildFutureTasksForPlan = (plan) => {
-    if (!plan) return;
-    const protectedTaskIds = new Set(sessions.map((s) => s.taskId));
-    if (activeTaskId) protectedTaskIds.add(activeTaskId);
-    if (openSession?.taskId) protectedTaskIds.add(openSession.taskId);
-    const todayStart = startOfDay(today);
-    const targetKeys = plan.enabled === false ? [] : repeatPlanDateKeys(plan).filter((k) => startOfDay(dateFromKey(k)) >= todayStart);
+  const addBatch = (dateKeys, parsedLines, newPlans = []) => {
+    if (newPlans.length) setRepeatPlans((plans) => [...plans, ...newPlans]);
     setTasksByDate((prev) => {
-      const next = {};
-      Object.entries(prev).forEach(([dk, list]) => {
-        const isFuture = startOfDay(dateFromKey(dk)) >= todayStart;
-        const filtered = (list || []).filter((task) => {
-          if (task.repeatPlanId !== plan.id) return true;
-          if (!isFuture || task.done || protectedTaskIds.has(task.id)) return true;
-          return false;
-        });
-        if (filtered.length) next[dk] = filtered;
+      const next = { ...prev };
+      dateKeys.forEach((k2) => {
+        const list = next[k2] ? [...next[k2]] : [];
+        parsedLines.forEach((p) => list.push({ id: nextId(), text: p.text, time: p.time, note: "", reminderTime: p.time, reminderEnabled: !!p.time, done: false, repeat: p.repeat || "none", repeatPlanId: p.repeatPlanId || undefined }));
+        next[k2] = list;
       });
-      if (plan.enabled !== false) {
-        targetKeys.forEach((dk) => {
-          const list = next[dk] ? [...next[dk]] : [];
-          if (!list.some((task) => task.repeatPlanId === plan.id)) {
-            list.push({ id: nextId(), text: plan.text, time: plan.time || null, note: "", reminderTime: plan.time || null, reminderEnabled: !!plan.time, done: false, repeat: plan.repeat, repeatPlanId: plan.id });
-          }
-          next[dk] = list;
-        });
-      }
       return next;
     });
+    setShowBatchModal(false);
   };
-  const updateRepeatPlan = (id, patch) => {
-    const old = repeatPlans.find((p) => p.id === id);
-    if (!old) return;
-    const nextPlan = { ...old, ...patch, id, weekdays: Array.isArray(patch.weekdays) ? [...patch.weekdays] : (Array.isArray(old.weekdays) ? [...old.weekdays] : []) };
-    setRepeatPlans((prev) => prev.map((p) => p.id === id ? nextPlan : p));
-    rebuildFutureTasksForPlan(nextPlan);
-  };
-  const toggleRepeatPlan = (id) => {
-    const old = repeatPlans.find((p) => p.id === id);
-    if (!old) return;
-    const nextPlan = { ...old, enabled: old.enabled === false };
-    setRepeatPlans((prev) => prev.map((p) => p.id === id ? nextPlan : p));
-    rebuildFutureTasksForPlan(nextPlan);
-  };
-  const deleteRepeatPlan = (id, removeUnexecuted = false) => {
-    const protectedTaskIds = new Set(sessions.map((s) => s.taskId));
-    if (activeTaskId) protectedTaskIds.add(activeTaskId);
-    if (openSession?.taskId) protectedTaskIds.add(openSession.taskId);
-    setRepeatPlans((prev) => prev.filter((p) => p.id !== id));
+  const updateRepeatPlan = (planId, patch) => {
+    const oldPlan = repeatPlans.find((plan) => String(plan.id) === String(planId));
+    if (!oldPlan) return;
+    if (patch.repeat === "none") { deleteRepeatPlan(planId); return; }
+    const nextPlan = { ...oldPlan, ...patch, id: oldPlan.id, enabled: oldPlan.enabled !== false, weekdays: Array.isArray(patch.weekdays) ? patch.weekdays : (oldPlan.weekdays || []) };
+    const affectedTaskIds = new Set();
+    Object.values(tasksByDate).forEach((list) => (list || []).forEach((task) => {
+      if (String(task.repeatPlanId) === String(planId) && !task.done) affectedTaskIds.add(task.id);
+    }));
+    setRepeatPlans((plans) => plans.map((plan) => String(plan.id) === String(planId) ? nextPlan : plan));
     setTasksByDate((prev) => {
       const next = {};
       Object.entries(prev).forEach(([dk, list]) => {
-        const mapped = [];
-        (list || []).forEach((task) => {
-          if (task.repeatPlanId !== id) { mapped.push(task); return; }
-          const protectedHistory = task.done || protectedTaskIds.has(task.id);
-          if (removeUnexecuted && !protectedHistory) return;
-          const clean = { ...task, repeat: "none" };
-          delete clean.repeatPlanId;
-          mapped.push(clean);
+        next[dk] = (list || []).map((task) => {
+          if (String(task.repeatPlanId) !== String(planId) || task.done) return task;
+          const reminderTime = task.reminderTime === oldPlan.time || !task.reminderTime ? (nextPlan.time || null) : task.reminderTime;
+          return { ...task, text: nextPlan.text, time: nextPlan.time || null, repeat: nextPlan.repeat, reminderTime, reminderEnabled: task.reminderEnabled && !!(reminderTime || task.reminderTime) };
         });
-        if (mapped.length) next[dk] = mapped;
+      });
+      return next;
+    });
+    setSessions((list) => list.map((session) => affectedTaskIds.has(session.taskId) ? { ...session, taskText: nextPlan.text } : session));
+    if (openSession && affectedTaskIds.has(openSession.taskId)) setOpenSession((session) => ({ ...session, taskText: nextPlan.text }));
+  };
+  const toggleRepeatPlan = (planId) => setRepeatPlans((plans) => plans.map((plan) => String(plan.id) === String(planId) ? { ...plan, enabled: plan.enabled === false } : plan));
+  const deleteRepeatPlan = (planId) => {
+    setRepeatPlans((plans) => plans.filter((plan) => String(plan.id) !== String(planId)));
+    setTasksByDate((prev) => {
+      const next = {};
+      Object.entries(prev).forEach(([dk, list]) => {
+        next[dk] = (list || []).map((task) => {
+          if (String(task.repeatPlanId) !== String(planId)) return task;
+          const { repeatPlanId, ...rest } = task;
+          return { ...rest, repeat: "none" };
+        });
       });
       return next;
     });
@@ -1762,10 +1544,10 @@ export default function TodayApp() {
   }, [tasksByDate]);
 
 
-  /* 已保存的重复计划可作为快速添加模板 */
+  /* 已保存重复计划：供快速添加与批量计划管理使用 */
   const repeatTemplates = repeatPlans
-    .filter((plan) => plan && plan.enabled !== false)
-    .map((plan) => ({ id: plan.id, text: plan.text, time: plan.time, repeat: plan.repeat }));
+    .filter((plan) => plan && plan.enabled !== false && plan.repeat && plan.repeat !== "none")
+    .map((plan) => ({ ...plan }));
 
   /* 计时器主循环：用绝对截止时间计算，避免窗口隐藏/系统繁忙造成 setInterval 漂移 */
   useEffect(() => {
@@ -2027,17 +1809,7 @@ export default function TodayApp() {
     } catch (e) {}
   };
 
-  const persistStateNow = async () => {
-    const timerRuntime = activeTaskId ? {
-      activeTaskId, running, remaining: currentRemainingSeconds(), savedAt: Date.now(),
-      openSession: openSession ? { ...openSession, elapsedMs: sessionElapsedMsRef.current } : null,
-    } : null;
-    const payload = { tasksByDate, repeatPlans, sessions, countdowns, taskTimerStates, taskListPrefs, soundSettings, timerRuntime, idCounter: idRef.current, theme, totalSeconds };
-    if (window.desktopAPI?.state) return window.desktopAPI.state.set(payload);
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(payload)); return true; } catch { return false; }
-  };
-
-  if (!loaded || !securityReady) {
+  if (!loaded) {
     return (
       <div style={{ background: THEMES.light.bg, minHeight: 660 }} className="flex items-center justify-center p-6">
         <div style={{ width: 380, height: 660, background: THEMES.light.window, borderRadius: 20, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 24px 60px -20px rgba(0,0,0,0.25)" }}>
@@ -2045,10 +1817,6 @@ export default function TodayApp() {
         </div>
       </div>
     );
-  }
-
-  if (securityStatus.locked) {
-    return <AppLockScreen c={c} onUnlocked={setSecurityStatus} />;
   }
 
   return (
@@ -2078,8 +1846,6 @@ export default function TodayApp() {
               {view === "day" ? <CalendarDays size={15} /> : <List size={15} />}
             </IconButton>
             <IconButton c={c} onClick={() => setShowRecords(true)} title="任务记录"><ClipboardList size={15} /></IconButton>
-            <IconButton c={c} onClick={() => setShowSecuritySettings(true)} title={securityStatus.enabled ? "密码与自动锁（已开启）" : "设置密码与自动锁"} active={securityStatus.enabled}><Lock size={15} /></IconButton>
-            <IconButton c={c} onClick={() => setShowBackupSettings(true)} title="备份与恢复"><Download size={15} /></IconButton>
             <IconButton c={c} onClick={openFloatingWindow} title="打开独立悬浮窗"><PictureInPicture2 size={15} /></IconButton>
             <IconButton c={c} onClick={() => setShowSoundSettings(true)} title="提醒铃声" active={soundSettings.mode === "custom"}><Volume2 size={15} /></IconButton>
             <IconButton c={c} onClick={() => setTheme(theme === "light" ? "dark" : "light")} title="切换主题">
@@ -2239,11 +2005,9 @@ export default function TodayApp() {
         {editingTaskId && <TaskEditModal c={c} task={findTaskById(editingTaskId)} onClose={() => setEditingTaskId(null)} onSave={(patch) => { updateTaskById(editingTaskId, patch); setEditingTaskId(null); }} />}
         {reminderTaskId && <TaskReminderModal c={c} task={findTaskById(reminderTaskId)} onClose={() => setReminderTaskId(null)} onSave={(patch) => { updateTaskById(reminderTaskId, patch); setReminderTaskId(null); }} />}
         {showSoundSettings && <SoundSettingsModal c={c} settings={soundSettings} onChange={setSoundSettings} onClose={() => setShowSoundSettings(false)} onTest={playReminderSound} />}
-        {showSecuritySettings && <SecurityModal c={c} status={securityStatus} onClose={() => setShowSecuritySettings(false)} onStatusChange={setSecurityStatus} />}
-        {showBackupSettings && <BackupModal c={c} onClose={() => setShowBackupSettings(false)} onBeforeExport={persistStateNow} />}
         {showCustomTimer && <CustomTimerModal c={c} currentMinutes={Math.floor(totalSeconds / 60)} onClose={() => setShowCustomTimer(false)} onApply={(minutes) => { applyPreset(minutes); setShowCustomTimer(false); }} />}
         {showCountdownManager && <CountdownManagerModal c={c} countdowns={countdowns} onChange={setCountdowns} onClose={() => setShowCountdownManager(false)} />}
-        {showBatchModal && <BatchAddModal c={c} today={today} initialDate={selectedDate} repeatPlans={repeatPlans} onClose={() => setShowBatchModal(false)} onSubmit={addBatch} onUpdatePlan={updateRepeatPlan} onTogglePlan={toggleRepeatPlan} onDeletePlan={deleteRepeatPlan} />}
+        {showBatchModal && <BatchAddModal c={c} today={today} initialDate={selectedDate} repeatPlans={repeatPlans} onClose={() => setShowBatchModal(false)} onSubmit={addBatch} onUpdatePlan={updateRepeatPlan} onDeletePlan={deleteRepeatPlan} onTogglePlan={toggleRepeatPlan} />}
         {showRecords && <RecordsModal c={c} sessions={sessions} onClose={() => setShowRecords(false)} onClear={clearSessions} />}
         {showReminderModal && (
           <ReminderModal

@@ -1,8 +1,8 @@
 {
   "name": "today-windows-app",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "private": true,
-  "description": "今日 - Windows 本地计划、独立悬浮窗、后台提醒、密码自动锁、完整备份恢复与专注计时软件",
+  "description": "今日 - Windows 本地计划、独立悬浮窗、后台提醒、可续接专注计时与目标倒计时软件",
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron .\"",
@@ -17,12 +17,16 @@
     "react-dom": "18.3.1"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "4.3.4",
-    "concurrently": "9.1.0",
-    "electron": "43.4.1",
-    "electron-builder": "26.15.3",
-    "vite": "6.4.3",
-    "wait-on": "8.0.1"
+    "@vitejs/plugin-react": "4.7.0",
+    "concurrently": "9.2.5",
+    "electron": "43.8.1",
+    "electron-builder": "26.17.0",
+    "sprintf-js": "file:vendor/sprintf-js-1.1.4-security.0.tgz",
+    "vite": "6.4.4",
+    "wait-on": "8.0.5"
+  },
+  "overrides": {
+    "sprintf-js": "$sprintf-js"
   },
   "build": {
     "appId": "com.local.todayapp",

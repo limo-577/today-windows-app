@@ -10,18 +10,16 @@ jobs:
     runs-on: windows-latest
 
     permissions:
-      id-token: write
-      contents: write
-      attestations: write
+      contents: read
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Install dependencies
@@ -53,18 +51,58 @@ jobs:
           Write-Host "Portable:"
           $portable | Select-Object Name, Length, FullName
 
+      - name: Upload release executables
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: windows-release
+          path: |
+            release/Today-Setup-*.exe
+            release/Today-Portable-*.exe
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    needs: build
+    runs-on: windows-latest
+
+    permissions:
+      id-token: write
+      contents: write
+      attestations: write
+
+    steps:
+      - name: Download release executables
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad6ea6f2b72d43f7d47b13c3 # v8.0.0
+        with:
+          name: windows-release
+          path: release
+
+      - name: Verify downloaded release files
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "release\Today-Setup-*.exe" -File
+          $portable = Get-ChildItem "release\Today-Portable-*.exe" -File
+
+          if (-not $installer) {
+            throw "Windows installer not found after artifact download."
+          }
+
+          if (-not $portable) {
+            throw "Windows portable build not found after artifact download."
+          }
+
       - name: Attest Windows installer
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
           subject-path: 'release/Today-Setup-*.exe'
 
       - name: Attest Windows portable
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
           subject-path: 'release/Today-Portable-*.exe'
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@e598afbe1493e6b1bafb1f389cabb956eab91231 # v3.0.3
         with:
           files: |
             release/Today-Setup-*.exe
