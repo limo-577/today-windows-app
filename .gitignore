@@ -1,6 +1,7 @@
 ﻿node_modules/
 dist/
 release/
+tmp/pdfs/edge-profile/
 
 .env
 .env.*

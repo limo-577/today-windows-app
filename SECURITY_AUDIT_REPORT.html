@@ -1,166 +1,150 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="color-scheme" content="light">
-<title>Application Security Review · today-windows-app · 2026-10-20</title>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light">
+<title>Application Security Review · today-windows-app · 2026-11-04</title>
 <style>
-:root{color-scheme:light;--ink:#17212f;--muted:#64748b;--line:#dce5ef;--soft:#f8fafc;--green:#39b99b;--green-dark:#187e69;--amber:#bb7b1f;--blue:#3477b9}
-*{box-sizing:border-box}body{margin:0;background:#fff;color:var(--ink);font:15px/1.65 "Segoe UI","Microsoft YaHei",Arial,sans-serif}
-main{width:min(100% - 40px,1000px);margin:38px auto 72px}header{margin-bottom:22px}.eyebrow{margin:0 0 8px;color:var(--green-dark);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
-h1{margin:0;font-size:clamp(27px,4vw,35px);line-height:1.2;letter-spacing:-.03em}h2{margin:0 0 10px;font-size:20px}h3{margin:0 0 6px;font-size:16px}
-p{margin:7px 0}.subtitle{margin-top:12px;color:#596579;font-size:14px}.muted,footer{color:var(--muted)}
-.metrics{display:grid;grid-template-columns:1.2fr repeat(3,1fr);gap:8px;margin:24px 0 28px;padding:16px 14px;border:1px solid var(--line);border-radius:14px}
-.metric{min-height:70px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}.metric:first-child{align-items:flex-start;padding-left:14px;text-align:left}
-.metric strong{font-size:24px;font-weight:650;line-height:1.2}.metric span{margin-top:5px;color:var(--muted);font-size:13px}.green{color:var(--green)}.amber{color:var(--amber)}
-section{margin-top:28px}.card,.callout,.finding{padding:15px 17px;border:1px solid var(--line);border-radius:11px;background:#fff;margin:11px 0}
-.callout{border-color:#d9eee8;background:#fbfefd}.notice{border-color:#f0dfbd;background:#fffbf4}
-.table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px}table{width:100%;border-collapse:collapse;font-size:13px}
-th,td{padding:9px 11px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{background:var(--soft);color:#445064;white-space:nowrap}tr:last-child td{border-bottom:0}
-code{padding:1px 5px;border-radius:4px;background:#eef2f7;font:12.5px/1.5 Consolas,monospace;overflow-wrap:anywhere}
-a{color:#286ca9}.status{font-weight:650;white-space:nowrap}.fixed{color:var(--green-dark)}.watch{color:var(--amber)}.pending{color:#985d05}
-ul{margin:6px 0 0;padding-left:21px}li{margin:5px 0}.finding{background:var(--soft)}.finding-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
-.finding dl{display:grid;grid-template-columns:135px 1fr;gap:5px 12px;margin:10px 0 0;font-size:14px}.finding dt{color:var(--muted)}.finding dd{margin:0}
-footer{margin-top:34px;padding-top:14px;border-top:1px solid var(--line);font-size:12px}
+:root{color-scheme:light;--ink:#17212f;--muted:#64748b;--line:#dce5ef;--soft:#f8fafc;--green:#39b99b;--green-dark:#187e69;--amber:#bb7b1f;--red:#ad3b31}
+*{box-sizing:border-box}body{margin:0;background:#fff;color:var(--ink);font:15px/1.65 "Segoe UI","Microsoft YaHei",Arial,sans-serif}main{width:min(100% - 40px,1000px);margin:38px auto 72px}header{margin-bottom:22px}.eyebrow{margin:0 0 8px;color:var(--green-dark);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}h1{margin:0;font-size:clamp(27px,4vw,35px);line-height:1.2}h2{margin:0 0 10px;font-size:20px}h3{margin:0 0 6px;font-size:16px}p{margin:7px 0}.subtitle,.muted,footer{color:var(--muted)}.subtitle{margin-top:12px;font-size:14px}
+.metrics{display:grid;grid-template-columns:1.2fr repeat(3,1fr);gap:8px;margin:24px 0 28px;padding:16px 14px;border:1px solid var(--line);border-radius:14px}.metric{min-height:70px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}.metric:first-child{align-items:flex-start;padding-left:14px;text-align:left}.metric strong{font-size:24px;line-height:1.2}.metric span{margin-top:5px;color:var(--muted);font-size:13px}.green{color:var(--green)}.amber{color:var(--amber)}.red{color:var(--red)}
+section{margin-top:28px}.card,.callout,.finding{padding:15px 17px;border:1px solid var(--line);border-radius:11px;background:#fff;margin:11px 0}.callout{border-color:#f0dfbd;background:#fffbf4}.table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px}table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:9px 11px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{background:var(--soft);color:#445064;white-space:nowrap}tr:last-child td{border-bottom:0}
+code{padding:1px 5px;border-radius:4px;background:#eef2f7;font:12.5px/1.5 Consolas,monospace;overflow-wrap:anywhere}a{color:#286ca9}.status{font-weight:650;white-space:nowrap}.fixed{color:var(--green-dark)}.watch{color:var(--amber)}.pending{color:var(--red)}ul{margin:6px 0 0;padding-left:21px}li{margin:5px 0}.finding{background:var(--soft)}.finding-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.finding dl{display:grid;grid-template-columns:145px 1fr;gap:5px 12px;margin:10px 0 0;font-size:14px}.finding dt{color:var(--muted)}.finding dd{margin:0}footer{margin-top:34px;padding-top:14px;border-top:1px solid var(--line);font-size:12px}
 @media(max-width:650px){main{width:min(100% - 28px,1000px);margin-top:27px}.metrics{grid-template-columns:repeat(2,1fr)}.metric:first-child{align-items:center;padding-left:0;text-align:center}.finding dl{grid-template-columns:1fr;gap:0}.finding dd{margin:0 0 8px}}
 @media print{main{width:auto;margin:0;padding:0}.card,.callout,.finding,.table-wrap,.metrics{break-inside:avoid}}
-</style>
-</head>
-<body><main>
-<header>
-<p class="eyebrow">Application Security Review</p>
-<h1>today-windows-app 安全审核</h1>
-<p class="subtitle">范围：Electron 桌面端 + React / Vite + npm 依赖 + GitHub Actions。审核日期：2026-10-20。工作区：<code>D:\today-windows-app</code></p>
-</header>
+</style></head><body><main>
+<header><p class="eyebrow">Application Security Review</p><h1>today-windows-app 安全审核</h1>
+<p class="subtitle">审核日期：2026-11-04。范围：Electron 桌面端 + React / Vite + npm 依赖 + GitHub Actions + 环境文件 + 当前 Git 跟踪文件与构建验证。</p></header>
 <div class="metrics" aria-label="审核概览">
-<div class="metric"><strong>JavaScript / Electron</strong><span>语言与应用形态</span></div>
-<div class="metric"><strong>10</strong><span>直接 npm 依赖</span></div>
-<div class="metric"><strong class="green">10</strong><span>已修复问题</span></div>
-<div class="metric"><strong class="amber">0</strong><span>待开发者决定</span></div>
+<div class="metric"><strong>JavaScript / Electron</strong><span>语言与应用形态</span></div><div class="metric"><strong>10</strong><span>直接 npm 依赖</span></div><div class="metric"><strong class="green">6</strong><span>本轮已修复项</span></div><div class="metric"><strong class="amber">0</strong><span>待开发者决定</span></div>
 </div>
 <div class="callout"><strong>结论</strong>
-<p>本轮锁文件审计包含 417 个依赖节点，<code>npm audit</code> 的 Critical / High / Moderate / Low 均为 0。未发现适用的 Critical / High 漏洞。Electron IPC、窗口隔离、导航限制、音频路径校验、CSV 公式防护和生产 CSP 均有保护；凭据扫描无高置信度命中。</p>
-<p><strong>尚有一项提交步骤：</strong><code>sprintf-js</code> 本地补丁的 5 个 vendor 文件已暂存，但尚未提交；提交时需与 <code>package.json</code>、<code>package-lock.json</code> 及安全改动一起提交。D-04 旧版构建链传递依赖和 C-07 Windows 代码签名列为后续关注。</p></div>
+<p>已完成 5 个安全依赖族的修复：Vite、follow-redirects、joi、fast-uri，以及你批准的 minimatch override。干净 <code>npm ci</code>、直接依赖核对、Vite 生产构建以及 Windows NSIS / portable 打包均通过；当前 <code>npm audit</code> 为 <strong>0 Critical、0 High、0 Moderate、0 Low</strong>。minimatch 9/10 已 override 到 11.0.1，保留 electron-builder 26.17.0。由于 override 跨越上游声明的主版本范围，<code>npm ls minimatch --all</code> 会将该节点标记为 <code>invalid</code>；NSIS / portable 实际构建已通过，需随上游兼容更新持续复核。</p>
+<p>另外，Git 曾跟踪 242 个 Edge 浏览器 profile 文件，含非空的 Login Data、Cookies、History、Local State 和崩溃转储。本轮已把这些文件从 Git 索引暂存移除、加入忽略规则，同时保留本机文件。按你的选择，本次不重写 Git 历史；旧提交仍含这些资料。若远端曾对他人开放，建议撤销浏览器中的真实登录会话。</p></div>
 
-<section><h2>项目概况</h2><div class="card">
-<p><strong>技术栈：</strong>JavaScript / JSX、React 18、Vite 6、Electron 43、npm；打包目标为 Windows NSIS 与 portable。</p>
-<p><strong>依赖数量：</strong>10 个直接依赖（3 个运行时、7 个开发 / 构建）；锁文件 417 个依赖节点（npm audit 统计，不含根项目）。</p>
-<p><strong>审核范围：</strong><code>src/</code>、<code>electron/</code>、<code>index.html</code>、<code>vite.config.js</code>、<code>package.json</code>、<code>package-lock.json</code>、<code>vendor/</code>、<code>.github/workflows/</code>、环境配置、文档与可读取的构建产物。</p>
-<p><strong>应用边界：</strong>本地桌面应用，无应用服务端、数据库或浏览器扩展；审核未发现源码远程请求、动态代码求值或 HTML 原样注入。</p>
-<p><strong>环境文件：</strong><code>.gitignore</code> 忽略 <code>.env</code>、<code>.env.*</code> 并允许示例文件；未发现现存或已跟踪的环境密钥文件。</p>
+<section><h2>项目概况与审核范围</h2><div class="card">
+<p><strong>技术栈：</strong>JavaScript / JSX、React 18、Vite 6、Electron 43、npm；项目版本 1.7.1；Windows NSIS 安装包及 portable。</p>
+<p><strong>依赖规模：</strong>10 个直接依赖；npm audit 当前元数据统计 415 个依赖节点（含可选与 peer 依赖）。</p>
+<p><strong>审核文件：</strong><code>src/</code>、<code>electron/</code>、<code>index.html</code>、<code>vite.config.js</code>、<code>package.json</code>、<code>package-lock.json</code>、<code>vendor/</code>、<code>.github/workflows/</code>、<code>.gitignore</code>、文档及 Git 跟踪的 <code>tmp/pdfs/edge-profile/</code>。检查 IPC、窗口隔离、导航、路径、CSV、CSP、CI 权限和凭据模式。</p>
+<p><strong>应用边界：</strong>本地桌面应用；源码未发现服务端 SQL/NoSQL、上传/解压服务或应用运行时远程 API 请求。Vite dev server 未设 <code>host</code>，启动脚本未传 <code>--host</code>，默认本机监听；仍已升至公告修复版。</p>
+<p><strong>当前环境文件：</strong><code>.gitignore</code> 忽略 <code>.env</code> 与 <code>.env.*</code> 并保留示例文件规则；Git 未跟踪 env/密钥证书路径。</p>
 </div></section>
 
-<section><h2>问题汇总</h2><div class="table-wrap"><table>
-<thead><tr><th>编号</th><th>类别</th><th>严重级别</th><th>位置</th><th>状态</th></tr></thead><tbody>
-<tr><td>D-01</td><td>依赖</td><td>Medium</td><td><code>vendor/sprintf-js/src/sprintf.js:33-39</code></td><td class="status fixed">已修复</td></tr>
-<tr><td>D-02</td><td>依赖</td><td>Low</td><td><code>package.json</code>、<code>package-lock.json</code>（Electron）</td><td class="status fixed">已修复</td></tr>
-<tr><td>D-03</td><td>依赖</td><td>Low</td><td><code>package-lock.json</code>、本地 tarball</td><td class="status fixed">已修复</td></tr>
-<tr><td>D-04</td><td>依赖</td><td>Low</td><td><code>package-lock.json</code>：glob / inflight / rimraf / boolean</td><td class="status watch">建议关注</td></tr>
-<tr><td>D-05</td><td>依赖</td><td>Low</td><td><code>vendor/</code> 五个文件、Git 索引</td><td class="status pending">已暂存，待提交</td></tr>
-<tr><td>D-06</td><td>依赖</td><td>Low</td><td><code>package.json</code>、<code>package-lock.json</code></td><td class="status fixed">已修复</td></tr>
-<tr><td>C-01</td><td>代码</td><td>Medium</td><td><code>electron/main.cjs:140-155</code>、<code>electron/preload.cjs</code></td><td class="status fixed">已修复</td></tr>
-<tr><td>C-02</td><td>代码</td><td>Medium</td><td><code>electron/main.cjs:132-137,172-184,235-255</code></td><td class="status fixed">已修复</td></tr>
-<tr><td>C-03</td><td>代码</td><td>Medium</td><td><code>electron/main.cjs:513-538</code></td><td class="status fixed">已修复</td></tr>
-<tr><td>C-04</td><td>代码</td><td>Medium</td><td><code>src/TodayApp.jsx:819-822</code></td><td class="status fixed">已修复</td></tr>
-<tr><td>C-05</td><td>代码</td><td>Low</td><td><code>index.html:7</code>、<code>vite.config.js:4-12</code></td><td class="status fixed">已修复</td></tr>
-<tr><td>C-06</td><td>代码 / CI</td><td>Low</td><td><code>.github/workflows/release.yml:12-105</code></td><td class="status fixed">已修复</td></tr>
-<tr><td>C-07</td><td>代码 / 发布</td><td>Low</td><td><code>package.json:44-49</code></td><td class="status watch">建议关注</td></tr>
+<section><h2>问题汇总</h2><div class="table-wrap"><table><thead><tr><th>编号</th><th>类别</th><th>严重级别</th><th>位置</th><th>状态</th></tr></thead><tbody>
+<tr><td>D-07</td><td>依赖</td><td>Medium</td><td><code>package.json</code>、<code>package-lock.json</code>，Vite 6.4.4</td><td class="status fixed">已修复并验证</td></tr>
+<tr><td>D-08</td><td>依赖</td><td>High</td><td><code>follow-redirects</code> 1.16.0；<code>wait-on → axios</code></td><td class="status fixed">已修复并验证</td></tr>
+<tr><td>D-09</td><td>依赖</td><td>High</td><td><code>joi</code> 18.3.0；<code>wait-on</code></td><td class="status fixed">已修复并验证</td></tr>
+<tr><td>D-10</td><td>依赖</td><td>Medium</td><td><code>fast-uri</code> 3.1.8；<code>app-builder-lib → ajv</code></td><td class="status fixed">已修复并验证</td></tr>
+<tr><td>D-11</td><td>依赖</td><td>Medium</td><td><code>minimatch</code> 9.0.9、10.2.6；electron-builder 构建链</td><td class="status fixed">已按批准 override 并通过打包</td></tr>
+<tr><td>D-12</td><td>依赖</td><td>Low</td><td><code>glob</code> 7.2.3、<code>inflight</code> 1.0.6、<code>rimraf</code> 2.6.3、<code>boolean</code> 3.2.0</td><td class="status watch">弃用传递依赖；上游更新后复核</td></tr>
+<tr><td>S-02</td><td>密钥 / 隐私</td><td>High</td><td><code>tmp/pdfs/edge-profile/</code>，242 个已跟踪文件，release commit <code>c67f327</code></td><td class="status watch">按要求仅从当前索引移除；历史保留</td></tr>
+<tr><td>C-07</td><td>代码 / 发布</td><td>Low</td><td>Windows NSIS 与 portable 构建配置</td><td class="status watch">构建成功；未配置 Authenticode 签名</td></tr>
+<tr><td>S-01</td><td>密钥</td><td>Low</td><td>上轮 EXE 的 AWS 样式字符串</td><td class="status fixed">旧基线已确认 Electron 运行时误报</td></tr>
 </tbody></table></div>
-<p class="muted">状态说明：10 项已修复；D-05 已暂存，仍需随其依赖引用一起提交；D-04、C-07 是维护与发布建议，目前没有需要开发者立即作出的取舍。</p></section>
+<p class="muted">D-11 原先的 6 个 npm audit moderate 项是同一个 minimatch 公告沿依赖链传播的审计记录，不是 6 个不同漏洞；当前 audit 为 0。跨主版本 override 使 <code>npm ls minimatch --all</code> 报 semver invalid，但实际 NSIS / portable 构建通过。S-02 的本轮 Git 索引删除尚未提交，历史对象仍保留；按你的选择不重写历史。</p></section>
 
-<section><h2>直接依赖（锁文件实际版本）</h2><div class="table-wrap"><table>
-<thead><tr><th>类型</th><th>依赖</th><th>版本</th><th>核对</th></tr></thead><tbody>
-<tr><td>运行时</td><td>lucide-react</td><td>0.468.0</td><td>未发现当前锁定版本适用告警。</td></tr>
-<tr><td>运行时</td><td>react</td><td>18.3.1</td><td>客户端 UI；不使用 React Server Components。</td></tr>
-<tr><td>运行时</td><td>react-dom</td><td>18.3.1</td><td>客户端 UI；未发现当前锁定版本适用告警。</td></tr>
-<tr><td>开发</td><td>@vitejs/plugin-react</td><td>4.7.0</td><td>兼容 Vite 6；此前由 4.3.4 同主版本升级。<a href="https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/CHANGELOG.md">官方 changelog</a></td></tr>
-<tr><td>开发</td><td>concurrently</td><td>9.2.5</td><td>核对为官方 concurrently 项目；依赖树未发现名称相似的仿冒包。</td></tr>
-<tr><td>开发</td><td>electron</td><td>43.8.1</td><td>高于本轮核对公告中的修复版本；应用不加载不可信页面。<a href="https://github.com/electron/electron/security/advisories">Electron 安全公告</a></td></tr>
-<tr><td>开发</td><td>electron-builder</td><td>26.17.0</td><td>Windows NSIS / portable 打包工具；npm audit 无告警。<a href="https://github.com/electron-userland/electron-builder/releases">官方发布记录</a></td></tr>
-<tr><td>开发</td><td>sprintf-js</td><td>1.1.4-security.0</td><td>本地 fork；限制数字格式精度。</td></tr>
-<tr><td>开发</td><td>vite</td><td>6.4.4</td><td>锁定版本无 npm audit 告警。</td></tr>
-<tr><td>开发</td><td>wait-on</td><td>8.0.5</td><td>v8 兼容分支；锁定版本无 npm audit 告警。</td></tr>
+<section><h2>直接依赖（当前锁文件 / 已安装版本）</h2><div class="table-wrap"><table><thead><tr><th>类型</th><th>依赖</th><th>版本</th><th>备注</th></tr></thead><tbody>
+<tr><td>运行时</td><td>lucide-react</td><td>0.468.0</td><td>npm audit 未报告。</td></tr>
+<tr><td>运行时</td><td>react</td><td>18.3.1</td><td>客户端应用；不使用 React Server Components。</td></tr>
+<tr><td>运行时</td><td>react-dom</td><td>18.3.1</td><td>npm audit 未报告。</td></tr>
+<tr><td>开发</td><td>@vitejs/plugin-react</td><td>4.7.0</td><td>兼容当前 Vite 6。</td></tr>
+<tr><td>开发</td><td>concurrently</td><td>9.2.5</td><td>构建 / 开发脚本。</td></tr>
+<tr><td>开发</td><td>electron</td><td>43.8.1</td><td>本次构建使用该版本；官方后续 43.8.7 已发布，可常规补丁更新复核。</td></tr>
+<tr><td>开发</td><td>electron-builder</td><td>26.17.0</td><td>按此前明确决定保留；不执行 npm audit 强制降级。</td></tr>
+<tr><td>开发</td><td>sprintf-js</td><td>1.1.4-security.0</td><td>本地精度限制 fork；源码与 tarball 已在 Git 跟踪。</td></tr>
+<tr><td>开发</td><td>vite</td><td>6.4.5</td><td>修复 GHSA-8g5g-mxqh-grgj。</td></tr>
+<tr><td>开发</td><td>wait-on</td><td>8.0.5</td><td>其传递依赖按兼容范围修复。</td></tr>
 </tbody></table></div>
 
-<h3 style="margin-top:18px">关键间接依赖</h3><div class="table-wrap"><table>
-<thead><tr><th>依赖</th><th>锁定版本</th><th>结论</th></tr></thead><tbody>
-<tr><td>@electron/get</td><td>3.1.0、5.1.0</td><td>构建期下载依赖；npm audit 无告警。</td></tr>
-<tr><td>axios</td><td>1.20.0</td><td>满足已核对公告的修复版本；仅用于构建依赖，应用源码未调用。<a href="https://github.com/axios/axios/security/advisories/GHSA-m8m8-qj5v-23w3">公告</a></td></tr>
-<tr><td>builder-util-runtime / app-builder-lib</td><td>9.7.0 / 26.17.0</td><td>已核对相关公告修复版本；本项目不使用 electron-updater 私有更新流或 AppImage。</td></tr>
-<tr><td>shell-quote</td><td>1.12.0</td><td>npm audit 无告警。</td></tr>
-<tr><td>brace-expansion</td><td>1.1.21、2.1.7、5.0.12</td><td>各兼容分支均无 npm audit 告警。</td></tr>
-<tr><td>minimatch</td><td>3.1.5、5.1.9、9.0.9、10.2.6</td><td>各分支满足已核对公告的修复界限；npm audit 无告警。</td></tr>
-<tr><td>glob / inflight / rimraf / boolean</td><td>7.2.3 / 1.0.6 / 2.6.3 / 3.2.0</td><td>属于打包工具链且无 audit 告警，但 npm 提示弃用 / 停止支持；见 D-04。</td></tr>
+<h3 style="margin-top:18px">关键间接依赖（当前实际版本）</h3><div class="table-wrap"><table><thead><tr><th>依赖</th><th>版本</th><th>结论</th></tr></thead><tbody>
+<tr><td>fast-uri</td><td>3.1.9</td><td>修复旧版多个 URI 解析告警。</td></tr>
+<tr><td>follow-redirects</td><td>1.16.2</td><td>修复跨源重定向敏感头处理漏洞。</td></tr>
+<tr><td>joi</td><td>18.3.2</td><td>修复多地址 email 校验的高复杂度拒绝服务问题。</td></tr>
+<tr><td>minimatch</td><td>3.1.5 / 5.1.9 / 11.0.1</td><td>electron-builder 链中原 9.0.9、10.2.6 已按批准的范围 override 到 11.0.1；旧的 3.x、5.x 节点保留，当前 npm audit 未报告漏洞。override 超出上游声明范围，npm ls 会提示 invalid。</td></tr>
+<tr><td>@electron/get</td><td>3.1.0、5.1.0</td><td>构建期 Electron 下载依赖；npm audit 未报告。</td></tr>
+<tr><td>axios</td><td>1.20.0</td><td>仅通过 wait-on 用于开发期；其 follow-redirects 已更新为 1.16.2。</td></tr>
+<tr><td>glob / inflight / rimraf / boolean</td><td>7.2.3 / 1.0.6 / 2.6.3 / 3.2.0</td><td>打包工具链弃用传递依赖；当前无对应 npm audit 告警。</td></tr>
 </tbody></table></div></section>
 
-<section><h2>已修复项、风险与利用条件</h2>
-<article class="finding"><div class="finding-head"><h3>D-01 · sprintf-js 精度限制（Medium）</h3><span class="status fixed">已修复</span></div><dl>
-<dt>风险 / 条件</dt><dd>攻击者若能控制格式串并传入极大数字精度，可能触发异常或高资源消耗。该依赖仅在开发 / 构建依赖中，未发现应用运行时代码调用。</dd>
-<dt>改动</dt><dd>按此前批准维护本地 fork，在格式化前将精度限制到 0–100（%g 至少为 1）；上游公告：<a href="https://github.com/advisories/GHSA-hp3w-g68c-fv3c">GHSA-hp3w-g68c-fv3c</a>。</dd></dl></article>
-<article class="finding"><div class="finding-head"><h3>D-02 · Electron 安全补丁（Low）</h3><span class="status fixed">已修复</span></div><dl>
-<dt>风险 / 条件</dt><dd>Electron 公告要求特定来源授权、跨源不可信 iframe 或特定帧订阅 / 自定义协议条件；应用不使用相关入口。</dd>
-<dt>改动</dt><dd>锁定 Electron 43.8.1；拒绝 renderer 新窗口，不加载不可信页面，隔离窗口权限。<a href="https://github.com/electron/electron/security/advisories">官方公告索引</a></dd></dl></article>
-<article class="finding"><div class="finding-head"><h3>D-03 · 本地补丁 tarball 完整性（Low）</h3><span class="status fixed">已修复</span></div><dl>
-<dt>风险 / 条件</dt><dd>锁文件摘要与本地 tarball 不匹配会使干净安装报 EINTEGRITY，并破坏包完整性校验。</dd>
-<dt>改动</dt><dd>按当前归档刷新 package-lock SHA-512；此前干净 <code>npm ci</code> 已成功。</dd></dl></article>
-<article class="finding"><div class="finding-head"><h3>D-04 · 构建链旧版弃用传递依赖（Low）</h3><span class="status watch">建议关注</span></div><dl>
-<dt>位置</dt><dd>锁文件：glob 7.2.3、inflight 1.0.6、rimraf 2.6.3、boolean 3.2.0，位于 electron-builder 依赖链。</dd>
-<dt>风险 / 利用条件</dt><dd>本次 npm audit 未发现适用漏洞；这是停止支持和维护层面的风险，并非已确认的可利用漏洞。已知 glob CLI 命令注入公告不适用于此处 7.2.3。<a href="https://github.com/isaacs/node-glob/security/advisories/GHSA-5j98-mcp5-4vw2">公告</a></dd>
-<dt>建议</dt><dd>不以 override 强行替换构建链依赖。可继续使用 v26 并跟进上游，或另行评估 electron-builder v27 大版本迁移；v27 要求 Node.js ≥22.12 并含破坏性变更，需先单独验证。<a href="https://github.com/electron-userland/electron-builder/blob/master/website/docs/migration/v26-to-v27.md">官方迁移指南</a></dd></dl></article>
-<article class="finding"><div class="finding-head"><h3>D-05 · 本地补丁文件未提交（Low）</h3><span class="status pending">已暂存，待提交</span></div><dl>
-<dt>位置</dt><dd><code>vendor/sprintf-js-1.1.4-security.0.tgz</code>、LICENSE、README、package.json、src/sprintf.js。</dd>
-<dt>风险</dt><dd>如果提交 package manifest / lockfile 时遗漏 vendor，其他 checkout 会缺少 file dependency，无法干净安装。</dd>
-<dt>处理</dt><dd>五个文件已在 Git 索引。提交时应将它们与 <code>package.json</code>、<code>package-lock.json</code> 和本轮安全改动一起提交。当前未创建 commit。</dd></dl></article>
-<article class="finding"><div class="finding-head"><h3>D-06 · 开发工具更新（Low）</h3><span class="status fixed">已修复</span></div><dl>
-<dt>风险 / 条件</dt><dd>此前 @vitejs/plugin-react 4.3.4、concurrently 9.1.0、wait-on 8.0.1 落后于各自兼容主版本线；未确认其存在适用漏洞。</dd>
-<dt>改动</dt><dd>升级到 4.7.0、9.2.5、8.0.5，保持主版本兼容范围；<code>npm ls --depth=0</code> 核对通过。</dd></dl></article>
-<article class="finding"><div class="finding-head"><h3>C-01 · IPC 来源与主框架校验（Medium）</h3><span class="status fixed">已修复</span></div><dl>
-<dt>利用条件</dt><dd>恶意子框架或被注入的 renderer 若能调用特权 IPC，可能触发本地能力。</dd>
-<dt>现有保护</dt><dd>校验窗口、窗口类型、主框架和 renderer URL 白名单；preload 仅暴露固定 API。</dd></dl></article>
-<article class="finding"><div class="finding-head"><h3>C-02 · Electron 窗口边界与导航（Medium）</h3><span class="status fixed">已修复</span></div><dl>
-<dt>利用条件</dt><dd>外部链接或恶意重定向在具备本地能力的窗口加载会扩大 renderer 注入影响。</dd>
-<dt>现有保护</dt><dd>拒绝新窗口，阻止非白名单导航；启用 contextIsolation、sandbox，关闭 nodeIntegration。</dd></dl></article>
-<article class="finding"><div class="finding-head"><h3>C-03 · 自定义铃声路径 / 大小（Medium）</h3><span class="status fixed">已修复</span></div><dl>
-<dt>利用条件</dt><dd>被篡改的偏好文件若能指定任意路径，可能尝试读取本地文件或造成资源消耗。</dd>
-<dt>现有保护</dt><dd>限制文件名和音频扩展名；所选文件上限 20 MB 并复制到应用目录。</dd></dl></article>
-<article class="finding"><div class="finding-head"><h3>C-04 · CSV 公式注入（Medium）</h3><span class="status fixed">已修复</span></div><dl>
-<dt>利用条件</dt><dd>任务标题以公式前缀开头且 CSV 在电子表格软件打开时，内容可能被当作公式执行。</dd>
-<dt>现有保护</dt><dd>对公式起始字符加前缀转义，并正确转义 CSV 双引号。</dd></dl></article>
-<article class="finding"><div class="finding-head"><h3>C-05 · 生产环境 CSP（Low）</h3><span class="status fixed">已修复</span></div><dl>
-<dt>风险</dt><dd>生产页面允许开发 HMR WebSocket 会扩大被注入脚本的外联能力。</dd>
-<dt>现有保护</dt><dd>生产 connect-src 限制为 self；开发 HMR 来源只由开发服务器注入。</dd></dl></article>
-<article class="finding"><div class="finding-head"><h3>C-06 · GitHub Actions 供应链权限（Low）</h3><span class="status fixed">已修复</span></div><dl>
-<dt>利用条件</dt><dd>可变 Action 引用或宽权限 token 被滥用可能篡改构建产物或发布。</dd>
-<dt>现有保护</dt><dd>第三方 Action 固定完整 commit SHA；build job 限制只读，release 写权限分离；无 pull_request_target。</dd></dl></article>
-<article class="finding"><div class="finding-head"><h3>C-07 · Windows 发行包未签名（Low）</h3><span class="status watch">建议关注</span></div><dl>
-<dt>风险</dt><dd>用户无法通过 Authenticode 验证发布者身份和包完整性；不代表发现恶意代码。</dd>
-<dt>建议</dt><dd>若公开分发，配置受保护的代码签名证书及 CI secret，再对 NSIS 和 portable 产物签名并验证；目前没有可用证书，未擅自配置。</dd></dl></article>
+<section><h2>依赖问题、利用条件与修复</h2>
+<article class="finding"><div class="finding-head"><h3>D-07 · Vite deny 规则查询参数绕过（Medium）</h3><span class="status fixed">已修复</span></div><dl>
+<dt>位置 / 版本</dt><dd><code>package.json</code>、<code>package-lock.json</code>；Vite 6.4.4。</dd>
+<dt>利用条件 / 风险</dt><dd>需要 dev server 显式暴露到网络、敏感文件处于允许目录且由 deny 规则保护；攻击者可利用查询参数读取该文件。当前配置未设置 host、启动脚本未用 <code>--host</code>，上次默认只监听本机；为防误配置仍升级。</dd>
+<dt>修复与验证</dt><dd>升级 Vite 到 6.4.5 并刷新 SHA-512 lock integrity。干净 npm ci、npm audit、Vite build 和 Windows 打包通过。<a href="https://github.com/vitejs/vite/security/advisories/GHSA-8g5g-mxqh-grgj">GHSA-8g5g-mxqh-grgj</a></dd></dl></article>
+<article class="finding"><div class="finding-head"><h3>D-08 · follow-redirects 敏感请求头泄露（High）</h3><span class="status fixed">已修复</span></div><dl>
+<dt>位置 / 版本</dt><dd><code>wait-on → axios@1.20.0 → follow-redirects</code>；1.16.0 升至 1.16.2。</dd>
+<dt>利用条件 / 风险</dt><dd>受影响用法以数组形式传递请求头，并跟随攻击者控制的跨源重定向时，Authorization / Cookie 等头可能未剥除。该依赖仅在开发工具链，应用源码不调用。</dd>
+<dt>修复</dt><dd>npm audit fix 更新到 1.16.2；修复后 High 告警消失，clean install 与 Windows 构建通过。<a href="https://github.com/advisories/GHSA-q3jh-wrc6-jgq8">GHSA-q3jh-wrc6-jgq8</a> · <a href="https://github.com/advisories/GHSA-mrwp-f3q8-3g9p">GHSA-mrwp-f3q8-3g9p</a></dd></dl></article>
+<article class="finding"><div class="finding-head"><h3>D-09 · Joi email 多值校验拒绝服务（High）</h3><span class="status fixed">已修复</span></div><dl>
+<dt>位置 / 版本</dt><dd><code>wait-on</code> 依赖的 joi 18.3.0 升至 18.3.2。</dd>
+<dt>利用条件 / 风险</dt><dd>攻击者需能控制传给 <code>string().email({ multiple: true })</code> 的超长恶意输入；该包位于本地开发等待工具，不参与生产 renderer。</dd>
+<dt>修复</dt><dd>升级到 18.3.2。npm audit High 项归零，clean install 与打包验证通过。<a href="https://github.com/advisories/GHSA-4528-x5fx-h6hg">GHSA-4528-x5fx-h6hg</a></dd></dl></article>
+<article class="finding"><div class="finding-head"><h3>D-10 · fast-uri URI 解析混淆（Moderate）</h3><span class="status fixed">已修复</span></div><dl>
+<dt>位置 / 版本</dt><dd><code>app-builder-lib → ajv → fast-uri</code>；3.1.8 升至 3.1.9。</dd>
+<dt>利用条件 / 风险</dt><dd>恶意 URI 参与解析时可能造成 scheme / host / path 判定差异；仅存在于打包期 schema 依赖路径，本应用源码不提供 URI 解析服务。</dd>
+<dt>修复</dt><dd>npm audit fix 更新到 3.1.9，清理全部 fast-uri 告警。<a href="https://github.com/fastify/fast-uri/security/advisories">fast-uri 官方安全公告</a></dd></dl></article>
+<article class="finding"><div class="finding-head"><h3>D-11 · minimatch globparts 放大（Moderate）</h3><span class="status fixed">已修复并验证</span></div><dl>
+<dt>位置 / 版本</dt><dd>electron-builder 26.17.0 依赖链中的 minimatch@9.0.9 与 @10.2.6；上游修复版 11.0.1。</dd>
+<dt>利用条件 / 风险</dt><dd>攻击者需控制恶意 glob pattern，触发高复杂度预处理；项目内主要由本地打包过程处理 package 配置，风险限于构建环境的 CPU / 内存拒绝服务，不是 app 运行时漏洞。npm audit 将同一问题传播计作 6 个 Moderate 项。</dd>
+<dt>修复与验证</dt><dd>根据你的批准，在 <code>package.json</code> 将原 <code>minimatch@^9.0.3</code> 和 <code>minimatch@^10.2.5</code> override 到 11.0.1，并刷新 lockfile。干净 <code>npm ci</code> 与 <code>npm audit</code> 成功，audit 为 0；Windows NSIS 和 portable 均成功构建。因为 11.0.1 超出依赖包声明的 ^9 / ^10 范围，<code>npm ls minimatch --all</code> 会报告 semver invalid；需在上游更新后移除 override 并复核构建。</dd>
+<dt>自动修复说明</dt><dd><code>npm audit fix --force</code> 提议降级 electron-builder 到 25.1.0，未执行；保留 26.17.0 的既有决定。<a href="https://github.com/advisories/GHSA-g3hv-75wg-m249">GHSA-g3hv-75wg-m249</a></dd></dl></article>
 </section>
 
-<section><h2>密钥与凭据</h2><div class="card">
-<p>审核源码、配置、测试、文档和构建产物，未发现高置信度 API key、token、密码、私钥、数据库连接串或 webhook 凭据。此前 EXE 中的 9 个 AWS 样式字符串与官方 Electron 43.8.1 二进制相同偏移和指纹匹配，确认为运行时误报；本次新构建尚未完成 Windows 打包，未声称对新 EXE 做过同等比较。</p>
-<p><code>.gitignore</code> 忽略 <code>.env</code> 和 <code>.env.*</code>；未发现被跟踪的环境文件。若任何真实凭据曾提交或泄露，必须到对应平台撤销并重新生成，仅删代码不够。</p></div></section>
-
-<section><h2>验证结果</h2><div class="card">
-<ul>
-<li><code>npm audit --json</code>：417 个依赖节点；Critical / High / Moderate / Low 全为 0。</li>
-<li><code>npm ls --depth=0</code>：通过；10 个直接依赖均与安装版本匹配。</li>
-<li><code>git diff --check</code>：通过；仅有工作区换行符转换提示。</li>
-<li><code>npm run build:windows</code>：Vite 生产构建成功；NSIS / portable 阶段尝试下载打包工具时因 <code>getaddrinfo ENOTFOUND github.com</code> 失败。未生成可确认的本轮 Windows 安装包。</li>
-<li>项目未定义 test 或 lint 脚本，故没有既有测试套件可运行。</li>
+<section><h2>代码安全审核</h2><div class="card"><ul>
+<li><strong>IPC 来源验证：</strong><code>electron/main.cjs:140-160</code> 校验 sender window、窗口类型、main frame 和 renderer URL；preload 固定暴露 API，未暴露任意 channel。未发现 renderer 越权通道。</li>
+<li><strong>窗口与导航：</strong><code>electron/main.cjs:131-137,167-260</code> 拒绝新窗口、阻止非白名单导航；主窗和浮窗启用 <code>contextIsolation</code>、<code>sandbox</code>，关闭 <code>nodeIntegration</code>。</li>
+<li><strong>文件路径：</strong><code>electron/main.cjs:26,511-559</code> 铃声仅接受预设 basename / 扩展名、20 MB 上限并复制到应用 userData；未见用户可控任意路径读写。</li>
+<li><strong>CSV 公式注入：</strong><code>src/TodayApp.jsx:814-821</code> 对公式前缀加单引号并正确转义双引号。</li>
+<li><strong>CSP：</strong><code>index.html:7</code> 生产 <code>connect-src 'self'</code>、禁对象和限制 base/form；<code>vite.config.js:4-12</code> 只在开发服务放行 localhost HMR。</li>
+<li><strong>CI/CD：</strong><code>.github/workflows/release.yml</code> Actions 固定完整 SHA；构建 job 只读、release 权限单独配置；tag push 触发，不用 pull_request_target。</li>
+<li><strong>其他注入面：</strong>本地 Electron 工具未见 SQL / NoSQL 服务、eval / Function 动态执行、shell 命令拼接、远程脚本加载、TLS 校验关闭、文件上传解压或开放重定向。</li>
 </ul></div></section>
 
-<section><h2>需要开发者决定</h2><div class="card">
-<p><strong>开发者决定已确认：</strong>保持 electron-builder v26.17.0。当前 npm audit 无漏洞；暂不进行需要 Node.js ≥22.12 且包含破坏性变更的 v27 主版本迁移。</p>
-<p>D-04 继续作为维护关注项，等待 v26 上游清理旧版传递依赖，之后再复核。C-07 私用可继续未签名构建；公开发布建议配置受保护的签名证书并验证签名。</p></div></section>
+<section><h2>密钥与浏览器资料</h2>
+<article class="finding"><div class="finding-head"><h3>S-02 · Edge 浏览器 profile 被 Git 跟踪（High）</h3><span class="status pending">索引已移除；历史需处置</span></div><dl>
+<dt>发现位置</dt><dd><code>tmp/pdfs/edge-profile/</code> 242 个已跟踪文件；例如 Login Data 51,200 bytes、Cookies 20,480 bytes、History 249,856 bytes、Local State 4,326 bytes，另有浏览器崩溃转储。</dd>
+<dt>风险 / 条件</dt><dd>这些数据库可能含浏览记录、站点状态和加密的登录 / 会话材料；未解密、未输出或确认里面有有效账号。若该 release commit 已推送到他人可访问的 remote，复制者可能取得这些隐私数据与加密存储，需按潜在会话泄露处理。</dd>
+<dt>本轮修复</dt><dd>已将 242 个文件从 Git 索引暂存删除，并在 <code>.gitignore</code> 忽略 <code>tmp/pdfs/edge-profile/</code>；本机资料仍保留，未删除。下一次提交后当前分支新版本将不再包含它们。</dd>
+<dt>剩余风险</dt><dd>HEAD release commit <code>c67f327</code> 仍含资料，且本地 <code>origin/master</code> 跟踪 ref 指向该 commit；本次未 fetch 核实远端状态。按你的选择不重写历史。若 remote 曾对他人可访问，建议撤销浏览器内真实登录会话。本轮 profile 删除目前仅暂存在 Git 索引，尚未提交。</dd></dl></article>
+<p>纯文本源码 / 配置 / 文档扫描未发现高置信度 API key、token、私钥或 webhook 值；<code>.env</code> 与证书路径无 Git 跟踪记录。上轮 EXE 的 AWS 样式字符串与官方 Electron 二进制匹配，属于误报；本轮没有重新对最终 EXE 做凭据基准比对。</p>
+<p><strong>重要：</strong>若发现任何真实密钥或会话凭据曾公开，必须到对应平台撤销并重新生成 / 登出会话，仅从代码或 Git 当前版本删除不够。</p></section>
+
+<section><h2>已修复问题及改动</h2><div class="card"><ul>
+<li><code>package.json</code>：Vite 6.4.4 → 6.4.5。</li>
+<li><code>package-lock.json</code>：同步 Vite；follow-redirects 1.16.0 → 1.16.2；joi 18.3.0 → 18.3.2；fast-uri 3.1.8 → 3.1.9。</li>
+<li><code>.gitignore</code>：新增 <code>tmp/pdfs/edge-profile/</code> 规则，阻止个人浏览器 profile 再次进入版本控制。</li>
+<li>Git 索引：暂存移除 Edge profile 242 个文件；只从索引移除，工作区文件仍在。</li>
+<li><code>package.json</code>：按批准将 electron-builder 构建链中的 minimatch 9/10 范围 override 到 11.0.1；<code>package-lock.json</code> 已同步。构建器仍保持 26.17.0。</li>
+<li>未执行 electron-builder 降级、Git 历史改写或强制推送。</li>
+</ul></div></section>
+
+<section><h2>验证结果</h2><div class="card"><ul>
+<li><code>npm ci</code>：成功，365 packages installed；npm 报告 audit 0。</li>
+<li><code>npm ls --depth=0</code>：通过，10 个直接依赖均与锁文件一致。<code>npm ls minimatch --all</code> 会按上游 semver 范围将 11.0.1 override 标记为 invalid。</li>
+<li><code>npm audit --json</code>：415 个依赖元数据节点；0 Critical、0 High、0 Moderate、0 Low。</li>
+<li><code>npm run build:web</code>：通过，Vite 6.4.5 构建 1,578 个模块。</li>
+<li><code>npm run build:windows</code>：NSIS 与 portable 均通过，产物写入临时目录，没有覆盖 release 目录。</li>
+<li>Windows 打包提示未配置代码签名证书；签名被跳过。构建未包含测试或 lint 脚本，项目没有既有测试套件可运行。</li>
+<li><code>git diff --check</code> 与 <code>git diff --cached --check</code> 通过；浏览器 profile 删除已暂存，仍需最终检查 staged diff 后提交。</li>
+</ul></div></section>
+
+<section><h2>待开发者决定</h2><div class="card">
+<p>当前无待开发者决定事项。你已选择仅从 Git 索引移除 Edge profile，不重写历史。</p>
+</div></section>
 
 <section><h2>剩余风险与后续建议</h2><ul>
-<li>提交前将已暂存的五个 <code>vendor/</code> 文件与依赖清单、锁文件和安全代码改动一并提交。</li>
-<li>网络恢复后重跑 <code>npm run build:windows</code>，确认 NSIS 与 portable 两个最终产物；本轮打包验证被 GitHub DNS 阻断。</li>
-<li>维护本地 sprintf fork 和精度边界验证；上游修复后再评估切回。</li>
-<li>跟进 electron-builder 上游对 glob、inflight、rimraf、boolean 的更新；升级 v27 前阅读迁移指南并单独验证。</li>
-<li>公开分发前配置 Authenticode 签名并验证证书链。</li>
+<li>Git 历史仍含旧浏览器 profile；如果相关提交曾被他人访问，撤销浏览器内真实登录会话。当前版本的索引移除不会清除历史对象。</li>
+<li>跟进 electron-builder 上游兼容更新；确认上游声明支持已修复版后，移除 minimatch override 并重新运行 audit 与打包验证。</li>
+<li>逐步清理 glob / inflight / rimraf / boolean 弃用传递依赖；本轮 minimatch override 已获明确批准，但仍需在上游兼容后撤销。</li>
+<li>公开发行前配置 Authenticode 证书并验证签名链；当前 NSIS 和 portable 构建未签名。</li>
+<li>Electron 43.8.7 后续补丁可在常规验证窗口升级，不改变用户此前保持 electron-builder 26.17.0 的决定。</li>
+<li>确认异常命名的未跟踪 29 KB 文本补丁文件 <code>e v1.7.1</code> 所属后再决定是否保留；本轮未执行或修改该文件。</li>
 </ul></section>
-<footer>报告依据当前工作区、锁文件、源码、安全审计工具输出及公开安全公告生成。依赖漏洞状态会随公告和版本变化；npm audit 的 0 仅表示本轮锁文件扫描结果。</footer>
+
+<section><h2>主要公告与来源</h2><ul>
+<li><a href="https://github.com/vitejs/vite/security/advisories/GHSA-8g5g-mxqh-grgj">Vite GHSA-8g5g-mxqh-grgj</a></li>
+<li><a href="https://github.com/advisories/GHSA-q3jh-wrc6-jgq8">follow-redirects GHSA-q3jh-wrc6-jgq8</a> · <a href="https://github.com/advisories/GHSA-mrwp-f3q8-3g9p">GHSA-mrwp-f3q8-3g9p</a></li>
+<li><a href="https://github.com/advisories/GHSA-4528-x5fx-h6hg">Joi GHSA-4528-x5fx-h6hg</a></li>
+<li><a href="https://github.com/fastify/fast-uri/security/advisories">fast-uri 官方安全公告</a></li>
+<li><a href="https://github.com/advisories/GHSA-g3hv-75wg-m249">minimatch GHSA-g3hv-75wg-m249</a></li>
+<li><a href="https://github.com/advisories/GHSA-jr5w-w6x2-84p9">Electron eMudhra 证书公告</a> · <a href="https://github.com/electron/electron/releases">Electron 发布记录</a></li>
+</ul></section>
+<footer>报告日期：2026-11-04。依赖与构建结果来自本轮本地命令；代码结论来自本轮关键安全文件检查。当前 npm audit 无已知漏洞；跨主版本 minimatch override 的 semver 兼容风险已明确记录。</footer>
 </main></body></html>
